@@ -12,6 +12,7 @@ const CAPABILITIES = {
   'inventory:read': ['ADMIN', 'MANAGER', 'TEAM_LEADER'], // team leader is room-scoped (see roomScope)
   'people:read': ['ADMIN', 'MANAGER', 'TEAM_LEADER'],
   'accounts:read': ['ADMIN', 'MANAGER'], // credentials masked for MANAGER; TEAM_LEADER denied
+  'assignments:read': ['ADMIN', 'MANAGER', 'TEAM_LEADER'], // TEAM_LEADER room-scoped (see roomScope)
   'reports:read': ['ADMIN', 'MANAGER', 'TEAM_LEADER'],
   'reports:export': ['ADMIN', 'MANAGER'],
   // writing (Admin only)

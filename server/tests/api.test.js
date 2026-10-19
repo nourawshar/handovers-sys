@@ -174,3 +174,52 @@ test('validation & error handler: malformed ids / json / unknown route', async (
   assert.equal(r.status, 400);
   assert.equal((await a.req('GET', '/nope')).status, 404);
 });
+
+test('return flow: return-form → return (discrepancies) → timeline → double-return 409', async () => {
+  const { execFileSync } = require('node:child_process');
+  const path = require('node:path');
+  // Deterministic ACTIVE fixture (BE-1 assignment-creation endpoint lands separately).
+  execFileSync('node', [path.join(__dirname, '..', 'scripts', 'fixture-return.cjs')], { cwd: path.join(__dirname, '..'), stdio: 'pipe' });
+  const prisma = require('../src/db');
+  const assignment = await prisma.assignment.findUnique({ where: { assignmentCode: 'A-900001' } });
+  const id = assignment.id;
+  const admin = await as('admin');
+
+  // 1) return-form pre-fills out-state
+  const form = await admin.req('GET', `/assignments/${id}/return-form`);
+  assert.equal(form.status, 200);
+  assert.equal(form.body.data.out.assetCode, 'PHN-000001');
+  assert.equal(form.body.data.out.wa1ChatNormalCount, 4500);
+
+  // 2) submit return with two CRITICAL discrepancies (missing Bitrix + charger cable)
+  const ret = await admin.req('POST', `/assignments/${id}/return`, {
+    body: { returnCondition: 'FAIR', returnNotes: 'Charger cable missing', return: { wa1ChatNormalCount: 5120, bitrixAccountId: null, chargerCableAssetId: null } },
+  });
+  assert.equal(ret.status, 200);
+  assert.equal(ret.body.data.status, 'RETURNED');
+  assert.equal(ret.body.data.hasDiscrepancies, true);
+  const crit = ret.body.data.discrepancies.filter((c) => c.isDiscrepancy && c.severity === 'CRITICAL').map((c) => c.fieldKey);
+  assert.ok(crit.includes('bitrixAccountId') && crit.includes('chargerCableAssetId'));
+
+  // 3) timeline shows ASSIGNED → RETURNED (+ DISCREPANCY)
+  const tl = (await admin.req('GET', `/assignments/${id}/timeline?pageSize=20`)).body.data;
+  const types = tl.map((e) => e.eventType);
+  assert.ok(types.includes('ASSIGNED') && types.includes('RETURNED') && types.includes('DISCREPANCY'));
+
+  // 4) double-return → 409 (idempotent guard)
+  assert.equal((await admin.req('POST', `/assignments/${id}/return`, { body: { returnCondition: 'GOOD', return: {} } })).status, 409);
+  // return-form on non-ACTIVE → 409
+  assert.equal((await admin.req('GET', `/assignments/${id}/return-form`)).status, 409);
+
+  // 5) assets released back to AVAILABLE, holder/room cleared, Bitrix account released
+  const phone = await prisma.asset.findUnique({ where: { code: 'PHN-000001' }, select: { status: true, currentHolderEmployeeId: true, roomId: true } });
+  assert.equal(phone.status, 'AVAILABLE'); assert.equal(phone.currentHolderEmployeeId, null); assert.equal(phone.roomId, null);
+  const bitrix = await prisma.account.findFirst({ where: { identifier: 'sofia@clinic.bitrix24.com' }, select: { currentAssignmentId: true } });
+  assert.equal(bitrix.currentAssignmentId, null);
+
+  // 6) RBAC: TEAM_LEADER read-only & room-scoped; POST requires Admin
+  const tlUser = await as('tl.tr1');
+  assert.equal((await tlUser.req('POST', `/assignments/${id}/return`, { body: { return: {} } })).status, 403);
+  assert.equal((await tlUser.req('GET', `/assignments/${id}/timeline`)).status, 200);
+  await prisma.$disconnect();
+});
