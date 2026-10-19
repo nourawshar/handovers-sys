@@ -4,6 +4,7 @@ import AppLayout from '@/components/layout/AppLayout'
 import LoginPage from '@/pages/LoginPage'
 import DashboardPage from '@/pages/DashboardPage'
 import AssetListPage from '@/pages/assets/AssetListPage'
+import PhonesPage from '@/pages/phones/PhonesPage'
 import AssetFormPage from '@/pages/assets/AssetFormPage'
 import AssetDetailPage from '@/pages/assets/AssetDetailPage'
 import AccountsPage from '@/pages/AccountsPage'
@@ -28,7 +29,7 @@ export default function App() {
           <Route path="/assets/:id/timeline" element={<AssetDetailPage timelineOnly />} />
           <Route path="/assets/:id/edit" element={<RequireRole access="assets.edit"><AssetFormPage /></RequireRole>} />
 
-          <Route path="/phones" element={<AssetListPage phonesOnly />} />
+          <Route path="/phones" element={<PhonesPage />} />
           <Route path="/phones/assign" element={<RequireRole access="assets.new"><ComingSoon title="Phone assignment" phase="Phase 2" note="The 7-step phone assignment wizard." /></RequireRole>} />
 
           <Route path="/assignments" element={<AssignmentsPage />} />

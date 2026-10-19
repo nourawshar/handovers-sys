@@ -32,7 +32,9 @@ export function buildCustomSchema(fields: CategoryField[]) {
 }
 
 export const baseAssetSchema = z.object({
-  name: z.string().trim().min(1, 'Name is required').max(200),
+  // `name` is required for non-phone categories only (enforced in the asset form's resolver,
+  // mirroring how `imei` is conditionally required). Phones auto-derive their name from Make+Model.
+  name: z.string().trim().max(200),
   categoryId: z.string().min(1, 'Select a category'),
   serialNumber: z.string().optional(),
   qty: z.string().refine((v) => /^\d+$/.test(v) && Number(v) <= 100000, 'Quantity must be a whole number (0–100000)'),
@@ -45,7 +47,6 @@ export const baseAssetSchema = z.object({
     model: z.string(),
     color: z.string(),
     storage: z.string(),
-    appBinary: z.string(),
   }),
 })
 export type BaseAssetValues = z.infer<typeof baseAssetSchema>

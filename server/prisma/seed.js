@@ -119,14 +119,20 @@ async function main() {
     { key: 'purchase_date', label: 'Purchase date', type: 'date' },
     { key: 'warranty', label: 'Warranty', type: 'select', options: ['None', '6 months', '1 year', '2 years'] },
     { key: 'screen_protector', label: 'Screen protector fitted', type: 'boolean' },
+    { key: 'operating_system', label: 'Operating system' },
+    { key: 'battery_health', label: 'Battery health', type: 'select', options: ['Good', 'Fair', 'Poor'] },
   ]);
   await upsertFields(sims.id, [
     { key: 'phone_number', label: 'Phone number', isSearchable: true, isIdentifier: true, required: true },
     { key: 'carrier', label: 'Carrier', type: 'select', options: ['Turkcell', 'Vodafone', 'Turk Telekom', 'Other'] },
     { key: 'plan', label: 'Plan', type: 'string' },
+    { key: 'status', label: 'Status', type: 'select', options: ['ACTIVE', 'SUSPENDED', 'DEACTIVATED'] },
   ]);
   await upsertFields(laptops.id, [
-    { key: 'cpu', label: 'CPU' }, { key: 'ram_gb', label: 'RAM (GB)', type: 'number' }, { key: 'disk', label: 'Disk' },
+    { key: 'model', label: 'Model', isSearchable: true },
+    { key: 'cpu', label: 'CPU' },
+    { key: 'ram_gb', label: 'RAM (GB)', type: 'number' },
+    { key: 'disk', label: 'Disk' },
   ]);
   await upsertFields(printers.id, [
     { key: 'model', label: 'Model', isSearchable: true }, { key: 'pages_delivered', label: 'Pages delivered', type: 'number' },
@@ -150,9 +156,9 @@ async function main() {
   const simRows = [['905369700889', 'Turkcell'], ['905369700890', 'Turkcell'], ['905321112233', 'Vodafone'], ['905441234567', 'Turk Telekom']];
   let n = 0;
   for (const [num, carrier] of simRows) {
-    await upsertAsset({ code: `SIM-${String((n += 1)).padStart(6, '0')}`, categoryId: sims.id, name: `SIM ${num}`, serialNumber: `8990${num}`, condition: 'NEW', custom: { phone_number: num, carrier }, fieldMap: fm(sims) });
+    await upsertAsset({ code: `SIM-${String((n += 1)).padStart(6, '0')}`, categoryId: sims.id, name: `SIM ${num}`, serialNumber: `8990${num}`, condition: 'NEW', custom: { phone_number: num, carrier, status: 'ACTIVE' }, fieldMap: fm(sims) });
   }
-  await upsertAsset({ code: 'LAP-000001', categoryId: laptops.id, name: 'Lenovo ThinkPad E14', serialNumber: 'PF3ABCDE', condition: 'GOOD', custom: { cpu: 'Intel i5-1135G7', ram_gb: 16, disk: '512 GB NVMe' }, fieldMap: fm(laptops) });
+  await upsertAsset({ code: 'LAP-000001', categoryId: laptops.id, name: 'Lenovo ThinkPad E14', serialNumber: 'PF3ABCDE', condition: 'GOOD', custom: { model: 'ThinkPad E14', cpu: 'Intel i5-1135G7', ram_gb: 16, disk: '512 GB NVMe' }, fieldMap: fm(laptops) });
   await upsertAsset({ code: 'PRN-000001', categoryId: printers.id, name: 'HP LaserJet Pro M404', condition: 'GOOD', roomId: room('TR1'), custom: { model: 'M404dn', pages_delivered: 18250 }, fieldMap: fm(printers) });
   for (let i = 1; i <= 3; i += 1) {
     await upsertAsset({ code: `CBL-${String(i).padStart(6, '0')}`, categoryId: cables.id, name: 'USB-C charger cable', condition: i === 3 ? 'FAIR' : 'GOOD', fieldMap: {} });

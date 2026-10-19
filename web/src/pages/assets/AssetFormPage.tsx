@@ -12,7 +12,7 @@ import { baseAssetSchema, buildCustomSchema, customToForm, customToPayload, IMEI
 
 type FormValues = z.infer<typeof baseAssetSchema> & { custom: Record<string, unknown> }
 
-const EMPTY_PHONE = { imei: '', make: '', model: '', color: '', storage: '', appBinary: '' }
+const EMPTY_PHONE = { imei: '', make: '', model: '', color: '', storage: '' }
 const EMPTY: FormValues = {
   name: '', categoryId: '', serialNumber: '', qty: '1', condition: 'GOOD', roomId: '', notes: '', phone: EMPTY_PHONE, custom: {},
 }
@@ -84,6 +84,11 @@ export default function AssetFormPage() {
           imei: z.string().trim().regex(IMEI_RE, 'IMEI must be 14–17 digits'),
         }),
       })
+    } else {
+      // Non-phone categories keep a manually required Name; phones auto-derive it from Make+Model.
+      schema = schema.extend({
+        name: z.string().trim().min(1, 'Name is required').max(200),
+      })
     }
     return zodResolver(schema)(values, ctx, opts) as ReturnType<Resolver<FormValues>>
   }
@@ -110,7 +115,7 @@ export default function AssetFormPage() {
       name: a.name, categoryId: a.categoryId, serialNumber: a.serialNumber ?? '',
       phone: {
         imei: a.phone?.imei ?? '', make: a.phone?.make ?? '', model: a.phone?.model ?? '',
-        color: a.phone?.color ?? '', storage: a.phone?.storage ?? '', appBinary: a.phone?.appBinary ?? '',
+        color: a.phone?.color ?? '', storage: a.phone?.storage ?? '',
       },
       qty: String(a.qty), condition: a.condition, roomId: a.roomId ?? '', notes: a.notes ?? '',
       custom: customToForm(fieldsQ.data, a.customFields),
@@ -135,11 +140,15 @@ export default function AssetFormPage() {
       ? {
           imei: v.phone.imei.trim(),
           make: blank(v.phone.make), model: blank(v.phone.model), color: blank(v.phone.color), storage: blank(v.phone.storage),
-          appBinary: (blank(v.phone.appBinary) as 'BUSINESS' | 'NORMAL' | null),
         }
       : undefined
+    // Phones auto-derive their Name from Make + Model (fall back to 'Phone' when both are blank,
+    // so the server's min(1) is always satisfied). Non-phones keep the manual required Name.
+    const name = isPhone
+      ? [v.phone.make?.trim(), v.phone.model?.trim()].filter(Boolean).join(' ') || 'Phone'
+      : v.name.trim()
     const a = await save.mutateAsync({
-      name: v.name.trim(),
+      name,
       // The server allows re-categorising via PATCH, but this UI locks the category once created.
       ...(editing ? {} : { categoryId: v.categoryId }),
       serialNumber: v.serialNumber?.trim() || null,
@@ -176,9 +185,13 @@ export default function AssetFormPage() {
                 {categories.data?.filter((c) => c.isActive).map((c) => <option key={c.id} value={c.id}>{c.parentId ? '— ' : ''}{c.name}</option>)}
               </Select>
             </Field>
-            <Field label="Name" required error={errors.name?.message}>
-              <Input invalid={!!errors.name} placeholder="e.g. Samsung Galaxy A12" {...register('name')} />
-            </Field>
+            {isPhone ? (
+              <p className="text-sm text-slate-500">Name is auto-generated from Make + Model.</p>
+            ) : (
+              <Field label="Name" required error={errors.name?.message}>
+                <Input invalid={!!errors.name} placeholder="e.g. Samsung Galaxy A12" {...register('name')} />
+              </Field>
+            )}
             <Field label="Serial number" error={errors.serialNumber?.message}>
               <Input {...register('serialNumber')} />
             </Field>
@@ -209,11 +222,6 @@ export default function AssetFormPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="IMEI" required hint="14–17 digits" error={errors.phone?.imei?.message}>
                 <Input inputMode="numeric" maxLength={17} invalid={!!errors.phone?.imei} {...register('phone.imei')} />
-              </Field>
-              <Field label="App binary">
-                <Select {...register('phone.appBinary')}>
-                  <option value="">—</option><option value="BUSINESS">Business</option><option value="NORMAL">Normal</option>
-                </Select>
               </Field>
               <Field label="Make"><Input placeholder="Samsung" {...register('phone.make')} /></Field>
               <Field label="Model"><Input placeholder="Galaxy A12" {...register('phone.model')} /></Field>
