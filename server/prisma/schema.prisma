@@ -1,0 +1,553 @@
+// IT Asset Management & Device Handover System — data model (README §5)
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum CategoryKind {
+  physical
+  digital
+  account
+}
+
+enum FieldType {
+  string
+  number
+  date
+  boolean
+  select
+  textarea
+}
+
+enum AssetCondition {
+  NEW
+  GOOD
+  FAIR
+  POOR
+  DAMAGED
+  DISPOSED
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  RETURNED
+  DISPOSED
+  IN_REPAIR
+}
+
+enum PhotoType {
+  FRONT
+  BACK
+  CONDITION
+  GENERAL
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  TEAM_LEADER
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  LEFT
+  ON_LEAVE
+}
+
+enum DepartmentType {
+  HOSPITAL
+  CALLCENTER
+}
+
+enum AssignmentType {
+  PHONE
+  LAPTOP
+  PRINTER
+  SIM
+  GENERAL
+}
+
+enum AssignmentStatus {
+  DRAFT
+  ACTIVE
+  RETURNED
+  CLOSED
+}
+
+enum AssignmentItemRole {
+  PRIMARY
+  SIM1
+  SIM2
+  CHARGER_CABLE
+  CHARGER_ADAPTER
+  BUNDLED
+}
+
+enum TimelineEventType {
+  ASSIGNED
+  RETURNED
+  REASSIGNED
+  UPDATED
+  DISCREPANCY
+  NOTE
+}
+
+enum WhatsAppVariant {
+  BUSINESS
+  NORMAL
+}
+
+enum AccountKind {
+  GMAIL
+  WHATSAPP
+  BITRIX
+  OTHER
+}
+
+enum DiscrepancySeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+// ───────────────────────── Inventory core ─────────────────────────
+
+model AssetCategory {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String
+  parentId  String?       @db.Uuid
+  parent    AssetCategory?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  AssetCategory[] @relation("CategoryTree")
+  kind      CategoryKind  @default(physical)
+  /// Prefix used for auto-generated asset codes, e.g. PHN -> PHN-000123
+  codePrefix String       @default("AST")
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+
+  fields AssetCategoryField[]
+  assets Asset[]
+
+  @@unique([parentId, name])
+  @@index([parentId])
+}
+
+model AssetCategoryField {
+  id           String        @id @default(uuid()) @db.Uuid
+  categoryId   String        @db.Uuid
+  category     AssetCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  key          String
+  label        String
+  type         FieldType     @default(string)
+  options      Json?
+  required     Boolean       @default(false)
+  isSearchable Boolean       @default(false)
+  isIdentifier Boolean       @default(false)
+  sortOrder    Int           @default(0)
+
+  values AssetCustomFieldValue[]
+
+  @@unique([categoryId, key])
+  @@index([categoryId])
+}
+
+model Asset {
+  id                      String         @id @default(uuid()) @db.Uuid
+  code                    String         @unique
+  categoryId              String         @db.Uuid
+  category                AssetCategory  @relation(fields: [categoryId], references: [id])
+  name                    String
+  serialNumber            String?
+  qty                     Int            @default(1)
+  condition               AssetCondition @default(GOOD)
+  status                  AssetStatus    @default(AVAILABLE)
+  roomId                  String?        @db.Uuid
+  room                    Room?          @relation(fields: [roomId], references: [id])
+  currentHolderEmployeeId String?        @db.Uuid
+  currentHolder           Employee?      @relation("EmployeeCurrentAssets", fields: [currentHolderEmployeeId], references: [id])
+  notes                   String?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  customValues     AssetCustomFieldValue[]
+  phoneDetail      PhoneDetail?
+  photos           Photo[]
+  account          Account?
+  assignmentItems  AssignmentItem[]
+  assignmentsAsPrimary Assignment[]       @relation("AssignmentPrimaryAsset")
+  timelineEntries  AssignmentTimelineEntry[]
+
+  phoneSim1Uses     PhoneAssignmentDetail[] @relation("PhoneSim1")
+  phoneSim2Uses     PhoneAssignmentDetail[] @relation("PhoneSim2")
+  phoneCableUses    PhoneAssignmentDetail[] @relation("PhoneCable")
+  phoneAdapterUses  PhoneAssignmentDetail[] @relation("PhoneAdapter")
+
+  @@index([categoryId])
+  @@index([roomId])
+  @@index([currentHolderEmployeeId])
+  @@index([status])
+  @@index([serialNumber])
+}
+
+model AssetCustomFieldValue {
+  id      String             @id @default(uuid()) @db.Uuid
+  assetId String             @db.Uuid
+  asset   Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  fieldId String             @db.Uuid
+  field   AssetCategoryField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  value   Json?
+
+  @@unique([assetId, fieldId])
+  @@index([fieldId])
+}
+
+model PhoneDetail {
+  id              String           @id @default(uuid()) @db.Uuid
+  assetId         String           @unique @db.Uuid
+  asset           Asset            @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  imei            String           @unique
+  color           String?
+  storage         String?
+  model           String?
+  make            String?
+  carrier         String?
+  operatingSystem String?
+  appBinary       WhatsAppVariant?
+}
+
+model Photo {
+  id           String     @id @default(uuid()) @db.Uuid
+  assetId      String?    @db.Uuid
+  asset        Asset?     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assignmentId String?    @db.Uuid
+  assignment   Assignment? @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  accountId    String?    @db.Uuid
+  account      Account?   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type         PhotoType  @default(GENERAL)
+  fileName     String
+  path         String
+  mimeType     String
+  sizeBytes    Int
+  uploadedById String?    @db.Uuid
+  uploadedBy   User?      @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@index([assetId])
+  @@index([assignmentId])
+  @@index([accountId])
+}
+
+// ───────────────────────── People, departments, rooms ─────────────────────────
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  username     String   @unique
+  passwordHash String
+  fullName     String
+  role         UserRole
+  roomId       String?  @db.Uuid
+  room         Room?    @relation(fields: [roomId], references: [id])
+  isActive     Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+  photos        Photo[]
+  assignmentsCreated Assignment[]              @relation("AssignmentCreatedBy")
+  timelineEntries    AssignmentTimelineEntry[]
+  returnRecords      ReturnRecord[]
+  auditLogs          AuditLog[]
+
+  @@index([roomId])
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 of the opaque token (the raw token is never stored)
+  tokenHash  String    @unique
+  /// Rotation family; reuse of a revoked token revokes the whole family
+  familyId   String    @db.Uuid
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?   @db.Uuid
+  createdAt  DateTime  @default(now())
+  userAgent  String?
+  ip         String?
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @db.Uuid
+  actor      User?    @relation(fields: [actorId], references: [id])
+  action     String
+  targetType String?
+  targetId   String?
+  meta       Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+model Employee {
+  id               String         @id @default(uuid()) @db.Uuid
+  fullName         String
+  departmentTeamId String         @db.Uuid
+  departmentTeam   DepartmentTeam @relation(fields: [departmentTeamId], references: [id])
+  roomId           String?        @db.Uuid
+  room             Room?          @relation("RoomEmployees", fields: [roomId], references: [id])
+  phoneContact     String?
+  internalEmail    String?
+  status           EmployeeStatus @default(ACTIVE)
+  notes            String?
+  createdAt        DateTime       @default(now())
+
+  managedRooms    Room[]                    @relation("RoomManager")
+  currentAssets   Asset[]                   @relation("EmployeeCurrentAssets")
+  assignments     Assignment[]
+  timelineEntries AssignmentTimelineEntry[]
+
+  @@unique([fullName, departmentTeamId])
+  @@index([roomId])
+  @@index([departmentTeamId])
+}
+
+model DepartmentTeam {
+  id        String         @id @default(uuid()) @db.Uuid
+  name      String         @unique
+  type      DepartmentType
+  sortOrder Int            @default(0)
+  parentId  String?        @db.Uuid
+  parent    DepartmentTeam?  @relation("DepartmentTree", fields: [parentId], references: [id])
+  children  DepartmentTeam[] @relation("DepartmentTree")
+
+  employees      Employee[]
+  workIdentities WorkIdentity[]
+
+  @@index([parentId])
+}
+
+model Room {
+  id                String         @id @default(uuid()) @db.Uuid
+  code              String         @unique
+  teamType          DepartmentType @default(CALLCENTER)
+  managerEmployeeId String?        @db.Uuid
+  managerEmployee   Employee?      @relation("RoomManager", fields: [managerEmployeeId], references: [id])
+
+  employees      Employee[]     @relation("RoomEmployees")
+  workIdentities WorkIdentity[]
+  users          User[]
+  assets         Asset[]
+}
+
+model WorkIdentity {
+  id               String          @id @default(uuid()) @db.Uuid
+  name             String
+  roomId           String?         @db.Uuid
+  room             Room?           @relation(fields: [roomId], references: [id])
+  departmentTeamId String?         @db.Uuid
+  departmentTeam   DepartmentTeam? @relation(fields: [departmentTeamId], references: [id])
+  isActive         Boolean         @default(true)
+  notes            String?
+
+  assignments     Assignment[]
+  timelineEntries AssignmentTimelineEntry[]
+
+  @@unique([name, roomId])
+  @@index([roomId])
+  @@index([departmentTeamId])
+}
+
+// ───────────────────────── Assignment / handover / timeline ─────────────────────────
+
+model Assignment {
+  id               String           @id @default(uuid()) @db.Uuid
+  assignmentCode   String           @unique
+  type             AssignmentType
+  employeeId       String           @db.Uuid
+  employee         Employee         @relation(fields: [employeeId], references: [id])
+  workIdentityId   String?          @db.Uuid
+  workIdentity     WorkIdentity?    @relation(fields: [workIdentityId], references: [id])
+  assetId          String           @db.Uuid
+  asset            Asset            @relation("AssignmentPrimaryAsset", fields: [assetId], references: [id])
+  status           AssignmentStatus @default(DRAFT)
+  assignedAt       DateTime?
+  expectedReturnAt DateTime?
+  returnedAt       DateTime?
+  notes            String?
+  createdById      String           @db.Uuid
+  createdBy        User             @relation("AssignmentCreatedBy", fields: [createdById], references: [id])
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  items           AssignmentItem[]
+  timelineEntries AssignmentTimelineEntry[]
+  phoneDetail     PhoneAssignmentDetail?
+  returnRecords   ReturnRecord[]
+  photos          Photo[]
+  accounts        Account[]
+
+  @@index([employeeId])
+  @@index([assetId])
+  @@index([workIdentityId])
+  @@index([status])
+}
+
+model AssignmentItem {
+  id                  String             @id @default(uuid()) @db.Uuid
+  assignmentId        String             @db.Uuid
+  assignment          Assignment         @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  assetId             String             @db.Uuid
+  asset               Asset              @relation(fields: [assetId], references: [id])
+  role                AssignmentItemRole @default(BUNDLED)
+  conditionAtHandover AssetCondition
+  returnCondition     AssetCondition?
+  /// true while the parent assignment is ACTIVE (or DRAFT-reserved); cleared on return.
+  /// A partial unique index (see migration) enforces ONE active item per asset.
+  isActive            Boolean            @default(true)
+
+  @@unique([assignmentId, assetId])
+  @@index([assetId])
+}
+
+model AssignmentTimelineEntry {
+  id             String            @id @default(uuid()) @db.Uuid
+  assignmentId   String            @db.Uuid
+  assignment     Assignment        @relation(fields: [assignmentId], references: [id])
+  assetId        String            @db.Uuid
+  asset          Asset             @relation(fields: [assetId], references: [id])
+  employeeId     String            @db.Uuid
+  employee       Employee          @relation(fields: [employeeId], references: [id])
+  workIdentityId String?           @db.Uuid
+  workIdentity   WorkIdentity?     @relation(fields: [workIdentityId], references: [id])
+  eventType      TimelineEventType
+  snapshot       Json
+  createdById    String            @db.Uuid
+  createdBy      User              @relation(fields: [createdById], references: [id])
+  createdAt      DateTime          @default(now())
+
+  @@index([assetId, createdAt])
+  @@index([assignmentId, createdAt])
+  @@index([employeeId, createdAt])
+}
+
+model PhoneAssignmentDetail {
+  id           String     @id @default(uuid()) @db.Uuid
+  assignmentId String     @unique @db.Uuid
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  // SIM 1 + main WhatsApp
+  sim1Number           String?
+  sim1AssetId          String?          @db.Uuid
+  sim1Asset            Asset?           @relation("PhoneSim1", fields: [sim1AssetId], references: [id])
+  wa1Business          Boolean          @default(false)
+  wa1PhoneNumber       String?
+  wa1BackupEmail       String?
+  wa1BackupDate        DateTime?
+  wa1BackupUsedGB      Decimal?         @db.Decimal(8, 2)
+  wa1BackupTotalGB     Decimal?         @db.Decimal(8, 2)
+  wa1ChatNormalCount   Int?
+  wa1ChatArchivedCount Int?
+  wa1AppVariant        WhatsAppVariant?
+
+  // SIM 2 + secondary WhatsApp
+  sim2Number           String?
+  sim2AssetId          String?          @db.Uuid
+  sim2Asset            Asset?           @relation("PhoneSim2", fields: [sim2AssetId], references: [id])
+  wa2Business          Boolean          @default(false)
+  wa2PhoneNumber       String?
+  wa2BackupEmail       String?
+  wa2BackupDate        DateTime?
+  wa2BackupUsedGB      Decimal?         @db.Decimal(8, 2)
+  wa2BackupTotalGB     Decimal?         @db.Decimal(8, 2)
+  wa2ChatNormalCount   Int?
+  wa2ChatArchivedCount Int?
+  wa2AppVariant        WhatsAppVariant?
+
+  // Bitrix + chargers
+  bitrixAccountId        String?  @db.Uuid
+  bitrixAccount          Account? @relation(fields: [bitrixAccountId], references: [id])
+  chargerCableAssetId    String?  @db.Uuid
+  chargerCableAsset      Asset?   @relation("PhoneCable", fields: [chargerCableAssetId], references: [id])
+  chargerAdapterAssetId  String?  @db.Uuid
+  chargerAdapterAsset    Asset?   @relation("PhoneAdapter", fields: [chargerAdapterAssetId], references: [id])
+
+  notes String?
+
+  @@index([sim1AssetId])
+  @@index([sim2AssetId])
+  @@index([bitrixAccountId])
+}
+
+// ───────────────────────── Accounts (credentials) ─────────────────────────
+
+model Account {
+  id                  String      @id @default(uuid()) @db.Uuid
+  assetId             String?     @unique @db.Uuid
+  asset               Asset?      @relation(fields: [assetId], references: [id])
+  kind                AccountKind
+  subcategory         String?
+  identifier          String
+  email               String?
+  /// AES-256-GCM payload: base64(iv|tag|ciphertext) prefixed with key version, e.g. "v1:..."
+  passwordEnc         String
+  isWhatsAppBackup    Boolean     @default(false)
+  isActive            Boolean     @default(true)
+  currentAssignmentId String?     @db.Uuid
+  currentAssignment   Assignment? @relation(fields: [currentAssignmentId], references: [id])
+  notes               String?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  photos                 Photo[]
+  phoneAssignmentDetails PhoneAssignmentDetail[]
+
+  @@unique([kind, identifier])
+  @@index([currentAssignmentId])
+  @@index([identifier])
+}
+
+// ───────────────────────── Return records ─────────────────────────
+
+model ReturnRecord {
+  id              String          @id @default(uuid()) @db.Uuid
+  assignmentId    String          @db.Uuid
+  assignment      Assignment      @relation(fields: [assignmentId], references: [id])
+  returnedAt      DateTime        @default(now())
+  returnedById    String          @db.Uuid
+  returnedBy      User            @relation(fields: [returnedById], references: [id])
+  returnCondition AssetCondition?
+  returnNotes     String?
+
+  comparisonFields ReturnComparisonField[]
+
+  @@index([assignmentId])
+}
+
+model ReturnComparisonField {
+  id               String              @id @default(uuid()) @db.Uuid
+  returnRecordId   String              @db.Uuid
+  returnRecord     ReturnRecord        @relation(fields: [returnRecordId], references: [id], onDelete: Cascade)
+  fieldKey         String
+  label            String
+  valueAtHandover  Json?
+  valueAtReturn    Json?
+  isDiscrepancy    Boolean             @default(false)
+  severity         DiscrepancySeverity @default(INFO)
+
+  @@index([returnRecordId])
+}
