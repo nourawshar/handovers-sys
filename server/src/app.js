@@ -43,6 +43,8 @@ function createApp() {
   api.use('/asset-categories', require('./routes/categories.routes'));
   api.use('/assets', require('./routes/assets.routes'));
   api.use('/accounts', require('./routes/accounts.routes'));
+  api.use('/assignments', require('./routes/assignments.routes')); // BE-1 core: list/detail/create/phone/activate
+  api.use('/assignments', require('./routes/returns.routes')); // BE-2 return + BE-3 assignment timeline (Phase 2)
   api.use('/photos', require('./routes/photos.routes'));
   api.use('/', require('./routes/lookups.routes')); // /rooms /departments /employees /work-identities (read-only, Phase 1)
   app.use('/api/v1', api);
