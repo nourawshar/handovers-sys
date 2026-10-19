@@ -176,6 +176,177 @@ export interface Department {
   type?: string
 }
 
+/* ---------- Phone assignment (contract §7.2, §7.6, README §3.2) ---------- */
+
+export const WA_VARIANTS = ['BUSINESS', 'NORMAL'] as const
+export type WaVariant = (typeof WA_VARIANTS)[number]
+
+/** `PhoneAssignmentDetail` — the phone-specific fields on an assignment (§7.2). */
+export interface PhoneAssignmentDetail {
+  sim1Number: string | null
+  sim1AssetId?: string | null
+  wa1Business: boolean
+  wa1PhoneNumber: string | null
+  wa1BackupEmail: string | null
+  wa1BackupDate: string | null
+  wa1BackupUsedGB: number | null
+  wa1BackupTotalGB: number | null
+  wa1ChatNormalCount: number | null
+  wa1ChatArchivedCount: number | null
+  wa1AppVariant: WaVariant | null
+
+  sim2Number: string | null
+  sim2AssetId?: string | null
+  wa2Business: boolean
+  wa2PhoneNumber: string | null
+  wa2BackupEmail: string | null
+  wa2BackupDate: string | null
+  wa2BackupUsedGB: number | null
+  wa2BackupTotalGB: number | null
+  wa2ChatNormalCount: number | null
+  wa2ChatArchivedCount: number | null
+  wa2AppVariant: WaVariant | null
+
+  bitrixAccountId: string | null
+  chargerCableAssetId: string | null
+  chargerAdapterAssetId: string | null
+  notes?: string | null
+}
+
+export interface AssignmentItem {
+  id: string
+  role: string
+  conditionAtHandover?: string | null
+  returnCondition?: string | null
+  asset?: { id: string; code: string; name: string } | null
+}
+
+/** Full assignment detail incl. items + phone detail + photos (§7.2). */
+export interface AssignmentDetail extends Assignment {
+  notes?: string | null
+  items: AssignmentItem[]
+  phoneDetail: PhoneAssignmentDetail | null
+  photos: Photo[]
+  timelineEntries?: TimelineEntry[]
+}
+
+/** Request body for the core wizard submit, `POST /assignments/phone` (§7.6). */
+export interface PhoneAssignmentPayload {
+  employeeId: string
+  workIdentityId: string
+  phoneAssetId: string
+  imei: string | null
+  sim1Number?: string | null
+  sim1AssetId?: string | null
+  wa1Business: boolean
+  wa1PhoneNumber?: string | null
+  wa1BackupEmail?: string | null
+  wa1BackupDate?: string | null // "YYYY-MM-DD"
+  wa1BackupUsedGB?: number | null
+  wa1BackupTotalGB?: number | null
+  wa1ChatNormalCount?: number | null
+  wa1ChatArchivedCount?: number | null
+  wa1AppVariant?: WaVariant | null
+  sim2Number?: string | null
+  sim2AssetId?: string | null
+  wa2Business?: boolean | null
+  wa2PhoneNumber?: string | null
+  wa2BackupEmail?: string | null
+  wa2BackupDate?: string | null
+  wa2BackupUsedGB?: number | null
+  wa2BackupTotalGB?: number | null
+  wa2ChatNormalCount?: number | null
+  wa2ChatArchivedCount?: number | null
+  wa2AppVariant?: WaVariant | null
+  bitrixAccountId?: string | null
+  chargerCableAssetId?: string | null
+  chargerAdapterAssetId?: string | null
+  expectedReturnAt?: string | null
+  notes?: string | null
+}
+
+/* ---------- Return / handback (contract §8) ---------- */
+
+/** Pre-filled out-state for the two-column comparison (§8.1). */
+export interface ReturnOutState {
+  employeeFullName: string
+  workIdentityName: string
+  assetCode: string
+  assetName: string
+  condition: Condition | string
+  wa1ChatNormalCount: number | null
+  wa1ChatArchivedCount: number | null
+  wa1BackupDate: string | null
+  wa1BackupUsedGB: number | null
+  wa1BackupTotalGB: number | null
+  wa1BackupEmail?: string | null
+  wa2ChatNormalCount: number | null
+  wa2ChatArchivedCount: number | null
+  wa2BackupDate: string | null
+  wa2BackupUsedGB: number | null
+  wa2BackupTotalGB: number | null
+  wa2BackupEmail?: string | null
+  sim1Number: string | null
+  sim2Number: string | null
+  bitrixAccountId: string | null
+  chargerCableAssetId: string | null
+  chargerAdapterAssetId: string | null
+}
+
+export interface ReturnForm {
+  assignmentId: string
+  assignmentCode: string
+  out: ReturnOutState
+}
+
+/** Return-state submit body (§8.2). Omitted keys = unchanged (copied from out). */
+export interface ReturnPayload {
+  returnCondition: string
+  returnNotes?: string | null
+  return: {
+    wa1ChatNormalCount?: number | null
+    wa1ChatArchivedCount?: number | null
+    wa1BackupDate?: string | null
+    wa1BackupUsedGB?: number | null
+    wa1BackupTotalGB?: number | null
+    wa1BackupEmail?: string | null
+    wa2ChatNormalCount?: number | null
+    wa2ChatArchivedCount?: number | null
+    wa2BackupDate?: string | null
+    wa2BackupUsedGB?: number | null
+    wa2BackupTotalGB?: number | null
+    wa2BackupEmail?: string | null
+    sim1Number?: string | null
+    sim2Number?: string | null
+    bitrixAccountId?: string | null
+    chargerCableAssetId?: string | null
+    chargerAdapterAssetId?: string | null
+    newPhotos?: string[]
+  }
+}
+
+export const SEVERITIES = ['INFO', 'WARNING', 'CRITICAL'] as const
+export type Severity = (typeof SEVERITIES)[number]
+
+export interface ComparisonField {
+  fieldKey: string
+  label: string
+  valueAtHandover: unknown
+  valueAtReturn: unknown
+  isDiscrepancy: boolean
+  severity: Severity
+}
+
+export interface ReturnResult {
+  assignmentId: string
+  assignmentCode: string
+  status: string
+  returnedAt?: string | null
+  hasDiscrepancies: boolean
+  discrepancies?: ComparisonField[]
+  comparison: ComparisonField[]
+}
+
 export interface ListResult<T> {
   items: T[]
   total: number

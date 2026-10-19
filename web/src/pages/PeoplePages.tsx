@@ -1,16 +1,26 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
+import { Plus } from 'lucide-react'
 import { useAssignments, useRooms, useWorkIdentities } from '@/api/hooks'
+import { useAuthStore } from '@/store/auth'
+import { can } from '@/lib/permissions'
 import { fmtDate, titleCase } from '@/lib/utils'
-import { Badge, EmptyState, ErrorState, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap } from '@/components/ui'
+import { Badge, Button, EmptyState, ErrorState, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap } from '@/components/ui'
 
 export function AssignmentsPage() {
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
+  const user = useAuthStore((s) => s.user)
   const list = useAssignments({ status: status || undefined, page, pageSize: 25 })
   return (
     <>
-      <PageHeader title="Assignments" subtitle="Device handovers and their lifecycle" />
+      <PageHeader
+        title="Assignments"
+        subtitle="Device handovers and their lifecycle"
+        actions={can(user?.role, 'assets.new') && (
+          <Link to="/phones/assign"><Button><Plus className="h-4 w-4" /> Assign phone</Button></Link>
+        )}
+      />
       <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
         <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }} aria-label="Status">
           <option value="">Any status</option>
@@ -24,12 +34,12 @@ export function AssignmentsPage() {
           <>
             <TableWrap>
               <thead className="bg-slate-50"><tr>
-                <th className="th">Code</th><th className="th">Type</th><th className="th">Employee</th><th className="th">Identity</th><th className="th">Asset</th><th className="th">Assigned</th><th className="th">Due</th><th className="th">Status</th>
+                <th className="th">Code</th><th className="th">Type</th><th className="th">Employee</th><th className="th">Identity</th><th className="th">Asset</th><th className="th">Assigned</th><th className="th">Due</th><th className="th">Status</th><th className="th">View</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {list.data.items.map((a) => (
                   <tr key={a.id} className="hover:bg-slate-50">
-                    <td className="td font-mono text-xs font-semibold">{a.assignmentCode}</td>
+                    <td className="td font-mono text-xs font-semibold"><Link to={`/assignments/${a.id}`} className="text-brand-700 hover:underline">{a.assignmentCode}</Link></td>
                     <td className="td">{titleCase(a.type)}</td>
                     <td className="td">{a.employee?.fullName ?? '—'}</td>
                     <td className="td">{a.workIdentity?.name ?? '—'}</td>
@@ -37,6 +47,7 @@ export function AssignmentsPage() {
                     <td className="td">{fmtDate(a.assignedAt)}</td>
                     <td className="td">{fmtDate(a.expectedReturnAt)}</td>
                     <td className="td"><StatusBadge value={a.status} /></td>
+                    <td className="td"><Link to={`/assignments/${a.id}`}><Button size="sm" variant="secondary">View</Button></Link></td>
                   </tr>
                 ))}
               </tbody>

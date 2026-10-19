@@ -2,8 +2,9 @@
 // and docs/API_CONTRACT.md. Where the server deviates from the contract, the deviation is handled
 // here (and listed in the handoff) so a future reconciliation is a one-file change.
 import type {
-  Account, Asset, Category, CategoryField, Employee, ListResult, Photo, Room, SelectOption,
-  TimelineEntry, User, WorkIdentity, Assignment,
+  Account, Asset, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, Employee,
+  ListResult, PhoneAssignmentDetail, Photo, ReturnForm, ReturnResult, Room, SelectOption,
+  TimelineEntry, User, WorkIdentity,
 } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -204,3 +205,85 @@ export const normAssignment = (a: R): Assignment => ({
   asset: a.asset ?? (a.assetId ? { id: a.assetId, code: a.assetCode ?? '', name: a.assetName ?? '' } : null),
   assignedAt: a.assignedAt, expectedReturnAt: a.expectedReturnAt, returnedAt: a.returnedAt,
 })
+
+const num = (v: unknown): number | null => (v === undefined || v === null || v === '' ? null : Number(v))
+const bool = (v: unknown): boolean => v === true || v === 'true'
+
+/** `PhoneAssignmentDetail` (§7.2) — tolerant of nulls and string numerics. */
+export function normPhoneAssignmentDetail(p: R): PhoneAssignmentDetail {
+  const x = obj(p) ?? {}
+  return {
+    sim1Number: str(x.sim1Number), sim1AssetId: str(x.sim1AssetId),
+    wa1Business: bool(x.wa1Business), wa1PhoneNumber: str(x.wa1PhoneNumber),
+    wa1BackupEmail: str(x.wa1BackupEmail), wa1BackupDate: str(x.wa1BackupDate),
+    wa1BackupUsedGB: num(x.wa1BackupUsedGB), wa1BackupTotalGB: num(x.wa1BackupTotalGB),
+    wa1ChatNormalCount: num(x.wa1ChatNormalCount), wa1ChatArchivedCount: num(x.wa1ChatArchivedCount),
+    wa1AppVariant: x.wa1AppVariant ?? null,
+    sim2Number: str(x.sim2Number), sim2AssetId: str(x.sim2AssetId),
+    wa2Business: bool(x.wa2Business), wa2PhoneNumber: str(x.wa2PhoneNumber),
+    wa2BackupEmail: str(x.wa2BackupEmail), wa2BackupDate: str(x.wa2BackupDate),
+    wa2BackupUsedGB: num(x.wa2BackupUsedGB), wa2BackupTotalGB: num(x.wa2BackupTotalGB),
+    wa2ChatNormalCount: num(x.wa2ChatNormalCount), wa2ChatArchivedCount: num(x.wa2ChatArchivedCount),
+    wa2AppVariant: x.wa2AppVariant ?? null,
+    bitrixAccountId: str(x.bitrixAccountId), chargerCableAssetId: str(x.chargerCableAssetId),
+    chargerAdapterAssetId: str(x.chargerAdapterAssetId), notes: str(x.notes),
+  }
+}
+
+/** Full assignment detail (§7.2) — flat or nested employee/workIdentity/asset accepted. */
+export function normAssignmentDetail(d: R): AssignmentDetail {
+  const x = obj(d.data) ?? d
+  return {
+    ...normAssignment(x),
+    notes: str(x.notes),
+    items: Array.isArray(x.items) ? x.items.map((it: R) => ({
+      id: String(it.id), role: it.role ?? 'PRIMARY',
+      conditionAtHandover: it.conditionAtHandover ?? null, returnCondition: it.returnCondition ?? null,
+      asset: it.asset ?? null,
+    })) : [],
+    phoneDetail: obj(x.phoneDetail) ? normPhoneAssignmentDetail(x.phoneDetail) : null,
+    photos: Array.isArray(x.photos) ? x.photos.map(mapPhoto) : [],
+    timelineEntries: Array.isArray(x.timelineEntries) ? x.timelineEntries.map(normTimeline) : undefined,
+  }
+}
+
+/** Return-form out-state (§8.1). */
+export function normReturnForm(raw: unknown): ReturnForm {
+  const x = obj(obj(raw)?.data ?? raw) ?? {}
+  const o = obj(x.out) ?? {}
+  return {
+    assignmentId: String(x.assignmentId),
+    assignmentCode: x.assignmentCode,
+    out: {
+      employeeFullName: o.employeeFullName ?? '', workIdentityName: o.workIdentityName ?? '',
+      assetCode: o.assetCode ?? '', assetName: o.assetName ?? '', condition: o.condition ?? '',
+      wa1ChatNormalCount: num(o.wa1ChatNormalCount), wa1ChatArchivedCount: num(o.wa1ChatArchivedCount),
+      wa1BackupDate: str(o.wa1BackupDate), wa1BackupUsedGB: num(o.wa1BackupUsedGB), wa1BackupTotalGB: num(o.wa1BackupTotalGB),
+      wa1BackupEmail: str(o.wa1BackupEmail),
+      wa2ChatNormalCount: num(o.wa2ChatNormalCount), wa2ChatArchivedCount: num(o.wa2ChatArchivedCount),
+      wa2BackupDate: str(o.wa2BackupDate), wa2BackupUsedGB: num(o.wa2BackupUsedGB), wa2BackupTotalGB: num(o.wa2BackupTotalGB),
+      wa2BackupEmail: str(o.wa2BackupEmail),
+      sim1Number: str(o.sim1Number), sim2Number: str(o.sim2Number),
+      bitrixAccountId: str(o.bitrixAccountId),
+      chargerCableAssetId: str(o.chargerCableAssetId), chargerAdapterAssetId: str(o.chargerAdapterAssetId),
+    },
+  }
+}
+
+const normComparisonField = (c: R): ComparisonField => ({
+  fieldKey: c.fieldKey, label: c.label ?? c.fieldKey,
+  valueAtHandover: c.valueAtHandover, valueAtReturn: c.valueAtReturn,
+  isDiscrepancy: !!c.isDiscrepancy, severity: c.severity ?? 'INFO',
+})
+
+/** Return result (§8.2) — tolerates either `comparison` or legacy `discrepancies`. */
+export function normReturnResult(raw: unknown): ReturnResult {
+  const x = obj(obj(raw)?.data ?? raw) ?? {}
+  const comp = Array.isArray(x.comparison) ? x.comparison.map(normComparisonField)
+    : Array.isArray(x.discrepancies) ? x.discrepancies.map(normComparisonField) : []
+  return {
+    assignmentId: String(x.assignmentId), assignmentCode: x.assignmentCode,
+    status: x.status ?? 'RETURNED', returnedAt: x.returnedAt ?? null,
+    hasDiscrepancies: !!x.hasDiscrepancies, comparison: comp,
+  }
+}

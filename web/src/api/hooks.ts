@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from './client'
 import {
-  normAccount, normAsset, normAssignment, normCategories, normEmployee, normField, normList,
-  normPhoto, normRoom, normTimeline, normUser, normWorkIdentity, unwrap,
+  normAccount, normAsset, normAssignment, normAssignmentDetail, normCategories, normEmployee, normField, normList,
+  normPhoto, normReturnForm, normReturnResult, normRoom, normTimeline, normUser,
+  normWorkIdentity, unwrap,
 } from './normalize'
-import type { Asset, Category, CategoryField, Department, Photo, TimelineEntry } from './types'
+import type {
+  Asset, AssignmentDetail, Category, CategoryField, Department, PhoneAssignmentPayload, Photo, ReturnResult,
+  TimelineEntry,
+} from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type R = Record<string, any>
@@ -198,5 +202,85 @@ export function useAssignments(filters: { status?: string; type?: string; q?: st
     placeholderData: keepPreviousData,
     retry: false,
     queryFn: async () => normList(await api.get('/assignments', filters as any), normAssignment),
+  })
+}
+
+/* ---------- Assignments: detail + return + phone wizard (contract §7, §8) ---------- */
+
+export function useAssignmentDetail(id?: string) {
+  return useQuery({
+    queryKey: ['assignment', id],
+    enabled: !!id,
+    retry: false,
+    queryFn: async (): Promise<AssignmentDetail> => normAssignmentDetail(await api.get(`/assignments/${id}`)),
+  })
+}
+
+/** Assignment-scoped timeline (contract §9.2). */
+export function useAssignmentTimeline(id: string | undefined, page = 1) {
+  return useQuery({
+    queryKey: ['assignment-timeline', id, page],
+    enabled: !!id,
+    retry: false,
+    placeholderData: keepPreviousData,
+    queryFn: async () =>
+      normList(await api.get(`/assignments/${id}/timeline`, { page, pageSize: 20 }), normTimeline),
+  })
+}
+
+/** Pre-filled out-state snapshot for the two-column return comparison (contract §8.1). */
+export function useAssignmentReturnForm(id?: string) {
+  return useQuery({
+    queryKey: ['assignment-return-form', id],
+    enabled: !!id,
+    retry: false,
+    queryFn: async () => normReturnForm(await api.get(`/assignments/${id}/return-form`)),
+  })
+}
+
+/** Core wizard submit → POST /assignments/phone. Returns the activated assignment (§7.6). */
+export function useCreatePhoneAssignment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: PhoneAssignmentPayload): Promise<AssignmentDetail> => {
+      const raw = (await api.post<R>('/assignments/phone', p)) as R
+      return normAssignmentDetail(unwrap(raw) as R)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assignments'] }),
+  })
+}
+
+/** Upload photos to an assignment after it exists (contract §4.12 pattern) — used post-create. */
+export function useUploadAssignmentPhotos(assignmentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ files, type }: { files: File[]; type: string }): Promise<Photo[]> => {
+      const form = new FormData()
+      form.append('type', type) // text fields must precede files for multer to see them
+      files.forEach((f) => form.append('photos', f))
+      const raw = await api.upload<R>(`/assignments/${assignmentId}/photos`, form)
+      const d = unwrap(raw)
+      return (Array.isArray(d) ? d : []).map(normPhoto)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assignment', assignmentId] })
+      qc.invalidateQueries({ queryKey: ['assignments'] })
+    },
+  })
+}
+
+/** Return submit → POST /assignments/:id/return (contract §8.2). */
+export function useSubmitPhoneReturn(assignmentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: unknown): Promise<ReturnResult> => {
+      const raw = (await api.post<R>(`/assignments/${assignmentId}/return`, p)) as R
+      return normReturnResult(unwrap(raw) as R)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assignment', assignmentId] })
+      qc.invalidateQueries({ queryKey: ['assignments'] })
+      qc.invalidateQueries({ queryKey: ['assignment-timeline', assignmentId] })
+    },
   })
 }
