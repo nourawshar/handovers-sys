@@ -116,4 +116,35 @@ export const api = {
   patch: <T = unknown>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   del: <T = unknown>(path: string) => request<T>(path, { method: 'DELETE' }),
   upload: <T = unknown>(path: string, form: FormData) => request<T>(path, { method: 'POST', form }),
+  /**
+   * Fetch a file (blob) endpoint — the export endpoints return a download, not JSON, so the normal
+   * `request`/`get` JSON parser can't be used. Handles the 401 refresh like `request` does.
+   */
+  download: async (path: string, query: Query, accept: string): Promise<Blob> => {
+    const doFetch = () =>
+      fetch(`${API_BASE}${path}${qs(query)}`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: { Accept: accept },
+      })
+    let res: Response
+    try {
+      res = await doFetch()
+    } catch {
+      throw new ApiError(0, 'Cannot reach the server. Check your connection or the backend.')
+    }
+    if (res.status === 401) {
+      const ok = await refreshSession()
+      if (ok) res = await doFetch()
+      if (res.status === 401) {
+        useAuthStore.getState().clear()
+        throw new ApiError(401, 'Your session has expired. Please sign in again.')
+      }
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new ApiError(res.status, errorMessage(text, `Export failed (${res.status})`), text)
+    }
+    return res.blob()
+  },
 }

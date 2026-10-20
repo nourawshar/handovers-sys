@@ -5,7 +5,9 @@
   "main": "src/server.js",
   "private": true,
   "type": "commonjs",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
@@ -25,6 +27,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^18.0.8",
+    "exceljs": "^4.4.0",
     "express": "^4.22.3",
     "express-rate-limit": "^8.7.1",
     "helmet": "^8.3.0",

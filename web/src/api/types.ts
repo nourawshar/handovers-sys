@@ -363,3 +363,88 @@ export interface ListResult<T> {
   page: number
   pageSize: number
 }
+
+/* ---------- Reports (contract §10) ---------- */
+
+export const REPORT_SLUGS = [
+  'who-has-what',
+  'condition',
+  'backup-staleness',
+  'outstanding-assignments',
+  'room-composition',
+] as const
+export type ReportSlug = (typeof REPORT_SLUGS)[number]
+
+/** §10.1 — current holder + device for a scope. */
+export interface WhoHasWhatRow {
+  employeeFullName: string
+  workIdentityName: string
+  roomCode: string
+  assetCode: string
+  assetName: string
+  categoryName: string
+  assignmentCode: string
+  assignedAt: string | null
+  expectedReturnAt: string | null
+}
+
+/** §10.2 — asset condition distribution per category. */
+export interface ConditionRow {
+  categoryName: string
+  condition: string
+  count: number
+}
+
+/** §10.3 — phones whose last WhatsApp backup is stale. */
+export interface BackupStalenessRow {
+  assetCode: string
+  assetName: string
+  wa1PhoneNumber: string | null
+  wa1BackupDate: string | null
+  wa1BackupUsedGB: number | null
+  daysSinceBackup: number
+  employeeFullName: string
+  workIdentityName: string
+}
+
+/** §10.4 — open assignments past expected return. */
+export interface OutstandingAssignmentRow {
+  assignmentCode: string
+  type: string
+  status: string
+  employeeFullName: string
+  assetCode: string
+  assignedAt: string | null
+  expectedReturnAt: string | null
+  daysOverdue: number
+}
+
+/** §10.5 — employees + work identities per room. */
+export interface RoomCompositionRow {
+  roomCode: string
+  managerFullName: string
+  employeeFullName: string
+  workIdentityName: string
+  assignedAssetCodes: string[]
+}
+
+export type ReportRow =
+  | WhoHasWhatRow
+  | ConditionRow
+  | BackupStalenessRow
+  | OutstandingAssignmentRow
+  | RoomCompositionRow
+
+/** Query filters accepted by the report endpoints (contract §10). */
+export interface ReportFilters {
+  scope?: string
+  roomId?: string
+  departmentTeamId?: string
+  categoryId?: string
+  status?: string
+  days?: number
+  page?: number
+  pageSize?: number
+}
+
+export type ExportFormat = 'csv' | 'xlsx'

@@ -2,12 +2,12 @@ import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tansta
 import { api } from './client'
 import {
   normAccount, normAsset, normAssignment, normAssignmentDetail, normCategories, normEmployee, normField, normList,
-  normPhoto, normReturnForm, normReturnResult, normRoom, normTimeline, normUser,
+  normPhoto, normReportRows, normReturnForm, normReturnResult, normRoom, normTimeline, normUser,
   normWorkIdentity, unwrap,
 } from './normalize'
 import type {
-  Asset, AssignmentDetail, Category, CategoryField, Department, PhoneAssignmentPayload, Photo, ReturnResult,
-  TimelineEntry,
+  Asset, AssignmentDetail, Category, CategoryField, Department, ExportFormat, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
+  ReportRow, ReportSlug, ReturnResult, TimelineEntry,
 } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -301,6 +301,49 @@ export function useSubmitPhoneReturn(assignmentId: string) {
       qc.invalidateQueries({ queryKey: ['assignment', assignmentId] })
       qc.invalidateQueries({ queryKey: ['assignments'] })
       qc.invalidateQueries({ queryKey: ['assignment-timeline', assignmentId] })
+    },
+  })
+}
+
+/* ---------- Reports (contract §10) ---------- */
+
+/** Fetch one report's rows. Keyed by slug + filters so scope changes refetch. */
+export function useReport<T extends ReportRow = ReportRow>(slug: ReportSlug, filters: ReportFilters, enabled = true) {
+  return useQuery({
+    queryKey: ['report', slug, filters],
+    enabled,
+    placeholderData: keepPreviousData,
+    queryFn: async (): Promise<ListResult<T>> => normReportRows<T>(await api.get(`/reports/${slug}`, filters as any), slug),
+  })
+}
+
+const EXPORT_ACCEPT: Record<ExportFormat, string> = {
+  csv: 'text/csv',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+}
+
+/**
+ * Export a report as CSV/XLSX. Fetches the file as a blob and triggers a browser download via a
+ * temporary `<a download>`. Returns the chosen filename (or null if the server didn't send one).
+ */
+export function useExportReport() {
+  return useMutation({
+    mutationFn: async ({ slug, filters, format }: { slug: ReportSlug; filters: ReportFilters; format: ExportFormat }): Promise<string | null> => {
+      const blob = await api.download(`/reports/${slug}/export`, filters as any, EXPORT_ACCEPT[format])
+      const ext = format === 'xlsx' ? 'xlsx' : 'csv'
+      const fallback = `${slug}-${new Date().toISOString().slice(0, 10)}.${ext}`
+      const url = URL.createObjectURL(blob)
+      try {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = fallback
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+      return fallback
     },
   })
 }

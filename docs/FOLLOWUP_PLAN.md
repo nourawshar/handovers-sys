@@ -24,7 +24,8 @@
 - **FE-2**: assignment opens inline over /assets/:id/timeline, back/close returns to same scroll; multiple assignments openable in sequence; Return reachable from drawer; `npm run build` + `tsc` clean.
 
 ## Future-version notes (preserve)
+- **Consolidated deferred-scope reference:** `docs/FUTURE_VERSIONS.md` is the single source for deferred work-identity CRUD, the `sofia` reassignment flow, and the data-model gaps surfaced by reports. Point future waves there.
 - Reports (Phase 4): routes to ComingSoon; contract §10 (who-has-what, condition, backup-staleness, outstanding, room-composition) spec'd, no work this wave.
-- Work-identity CRUD (POST/PATCH/DELETE): still deferred; wizard/drawer read-only via lookups.
-- `sofia` reassignment flow (README G4): after return assets→AVAILABLE, reassign to new employee/identity with fresh REASSIGNED timeline — future module; this wave's release path is its prerequisite.
+- Work-identity CRUD (POST/PATCH/DELETE): still deferred; wizard/drawer read-only via lookups. See `docs/FUTURE_VERSIONS.md` §1.
+- `sofia` reassignment flow (README G4): after return assets→AVAILABLE, reassign to new employee/identity with fresh REASSIGNED timeline — future module; this wave's release path is its prerequisite. See `docs/FUTURE_VERSIONS.md` §2.
 - Gaps to confirm with owner: (a) Photo `context` migration acceptable? (b) Bitrix/charger selectable-as-different at return vs only confirm/mark-missing; (c) return photos required vs optional (plan models optional); (d) inline drawer return in-place vs link-out (plan links out).

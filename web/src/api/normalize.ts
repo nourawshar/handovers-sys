@@ -2,9 +2,9 @@
 // and docs/API_CONTRACT.md. Where the server deviates from the contract, the deviation is handled
 // here (and listed in the handoff) so a future reconciliation is a one-file change.
 import type {
-  Account, Asset, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, Employee,
-  ListResult, PhoneAssignmentDetail, Photo, ReturnForm, ReturnResult, Room, SelectOption,
-  TimelineEntry, User, WorkIdentity,
+  Account, Asset, BackupStalenessRow, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, ConditionRow,
+  Employee, ListResult, OutstandingAssignmentRow, PhoneAssignmentDetail, Photo, ReportRow, ReturnForm, ReturnResult, Room,
+  RoomCompositionRow, SelectOption, TimelineEntry, User, WhoHasWhatRow, WorkIdentity,
 } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -310,4 +310,72 @@ export function normReturnResult(raw: unknown): ReturnResult {
       return: Array.isArray(ps?.return) ? ps!.return.map(mapPhoto) : [],
     },
   }
+}
+
+/* ---------- Reports (contract §10) ---------- */
+
+const normWhoHasWhat = (r: R): WhoHasWhatRow => ({
+  employeeFullName: r.employeeFullName ?? '',
+  workIdentityName: r.workIdentityName ?? '',
+  roomCode: r.roomCode ?? '',
+  assetCode: r.assetCode ?? '',
+  assetName: r.assetName ?? '',
+  categoryName: r.categoryName ?? '',
+  assignmentCode: r.assignmentCode ?? '',
+  assignedAt: str(r.assignedAt),
+  expectedReturnAt: str(r.expectedReturnAt),
+})
+
+const normCondition = (r: R): ConditionRow => ({
+  categoryName: r.categoryName ?? '',
+  condition: r.condition ?? '',
+  count: Number(r.count ?? 0),
+})
+
+const normBackupStaleness = (r: R): BackupStalenessRow => ({
+  assetCode: r.assetCode ?? '',
+  assetName: r.assetName ?? '',
+  wa1PhoneNumber: str(r.wa1PhoneNumber),
+  wa1BackupDate: str(r.wa1BackupDate),
+  wa1BackupUsedGB: num(r.wa1BackupUsedGB),
+  daysSinceBackup: Number(r.daysSinceBackup ?? 0),
+  employeeFullName: r.employeeFullName ?? '',
+  workIdentityName: r.workIdentityName ?? '',
+})
+
+const normOutstanding = (r: R): OutstandingAssignmentRow => ({
+  assignmentCode: r.assignmentCode ?? '',
+  type: r.type ?? '',
+  status: r.status ?? '',
+  employeeFullName: r.employeeFullName ?? '',
+  assetCode: r.assetCode ?? '',
+  assignedAt: str(r.assignedAt),
+  expectedReturnAt: str(r.expectedReturnAt),
+  daysOverdue: Number(r.daysOverdue ?? 0),
+})
+
+const normRoomComposition = (r: R): RoomCompositionRow => ({
+  roomCode: r.roomCode ?? '',
+  managerFullName: r.managerFullName ?? '',
+  employeeFullName: r.employeeFullName ?? '',
+  workIdentityName: r.workIdentityName ?? '',
+  assignedAssetCodes: Array.isArray(r.assignedAssetCodes) ? r.assignedAssetCodes.map(String) : [],
+})
+
+/** Per-report row normaliser keyed by report slug. */
+export const REPORT_ROW_MAPPERS: Record<string, (r: R) => ReportRow> = {
+  'who-has-what': normWhoHasWhat,
+  condition: normCondition,
+  'backup-staleness': normBackupStaleness,
+  'outstanding-assignments': normOutstanding,
+  'room-composition': normRoomComposition,
+}
+
+/**
+ * Normalise a report list response. Reports return a bare `{ "data": [...] }` array (no `meta`,
+ * contract §10 preamble) — `normList` already tolerates that, so we reuse it and map each row.
+ */
+export function normReportRows<T extends ReportRow>(raw: unknown, slug: string): ListResult<T> {
+  const mapper = REPORT_ROW_MAPPERS[slug] ?? ((r: R) => r as unknown as ReportRow)
+  return normList<T>(raw, mapper as (x: R) => T)
 }

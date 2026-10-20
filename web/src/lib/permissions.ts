@@ -21,8 +21,9 @@ const ALL: Role[] = ['ADMIN', 'MANAGER', 'TEAM_LEADER']
 const ADMIN: Role[] = ['ADMIN']
 const MGR: Role[] = ['ADMIN', 'MANAGER']
 
-// NOTE: README §9 says Team Leaders can view reports within their room scope, but §7 lists /reports as
-// Manager/Admin. We follow the §7 route table (task spec) and flag the mismatch in the handoff.
+// NOTE: README §7 lists /reports as Manager/Admin, but §9 + contract §11 say Team Leaders can view
+// reports within their own room scope (no export). We follow §9/§11 (R10): the route is open to ALL,
+// and the ReportsPage hides scope pickers + export for TEAM_LEADER (server enforces the room scope).
 export const ROUTE_ACCESS: Record<RouteKey, Role[]> = {
   dashboard: ALL,
   assets: ALL,
@@ -35,7 +36,7 @@ export const ROUTE_ACCESS: Record<RouteKey, Role[]> = {
   employees: ALL,
   rooms: MGR,
   workIdentities: MGR,
-  reports: MGR,
+  reports: ALL,
   'settings.categories': ADMIN,
   'settings.users': ADMIN,
 }

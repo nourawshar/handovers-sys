@@ -15,7 +15,8 @@ import ReturnPage from '@/pages/assignments/ReturnPage'
 import { AssignmentsPage, RoomsPage, WorkIdentitiesPage } from '@/pages/PeoplePages'
 import CategoriesSettingsPage from '@/pages/settings/CategoriesSettingsPage'
 import UsersSettingsPage from '@/pages/settings/UsersSettingsPage'
-import { ComingSoon, Forbidden, NotFound } from '@/pages/Placeholders'
+import ReportsPage from '@/pages/reports/ReportsPage'
+import { Forbidden, NotFound } from '@/pages/Placeholders'
 
 export default function App() {
   return (
@@ -43,7 +44,7 @@ export default function App() {
           <Route path="/employees" element={<EmployeesPage />} />
           <Route path="/rooms" element={<RequireRole access="rooms"><RoomsPage /></RequireRole>} />
           <Route path="/work-identities" element={<RequireRole access="workIdentities"><WorkIdentitiesPage /></RequireRole>} />
-          <Route path="/reports" element={<RequireRole access="reports"><ComingSoon title="Reports" phase="Phase 4" /></RequireRole>} />
+          <Route path="/reports" element={<RequireRole access="reports"><ReportsPage /></RequireRole>} />
           <Route path="/settings/categories" element={<RequireRole access="settings.categories"><CategoriesSettingsPage /></RequireRole>} />
           <Route path="/settings/users" element={<RequireRole access="settings.users"><UsersSettingsPage /></RequireRole>} />
 
