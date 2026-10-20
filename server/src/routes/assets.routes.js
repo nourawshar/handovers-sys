@@ -83,8 +83,18 @@ const listInclude = {
   phoneDetail: { select: { imei: true, model: true, make: true, color: true, storage: true } },
   room: { select: { id: true, code: true } },
   currentHolder: { select: { id: true, fullName: true } },
+  customValues: true,
   _count: { select: { photos: true } },
 };
+
+/**
+ * Shape an asset's EAV customValues into a { key: value } map, dropping the raw rows.
+ * Shared by the list and detail handlers so the SIM wizard can read customFields.phone_number.
+ */
+function shapeCustomFields(asset, fields) {
+  const { customValues, ...rest } = asset;
+  return { ...rest, customFields: svc.shapeCustomFields(fields, customValues) };
+}
 
 /** Team leaders see assets located in their room or held by an employee of their room. */
 function scopeWhere(user) {
@@ -135,7 +145,14 @@ router.get(
       prisma.asset.count({ where }),
       prisma.asset.findMany({ where, include: listInclude, orderBy: [{ [f.sort]: f.order }, { id: 'asc' }], ...paginate(f) }),
     ]);
-    res.json({ data, meta: pageMeta(f, total) });
+    // Batch field-definition lookups by category so the list can shape each item's customFields.
+    const catIds = [...new Set(data.map((a) => a.categoryId))];
+    const defsByCat = new Map();
+    for (const cid of catIds) {
+      const defs = await svc.fieldDefsFor(cid);
+      if (defs) defsByCat.set(cid, defs.fields);
+    }
+    res.json({ data: data.map((a) => shapeCustomFields(a, defsByCat.get(a.categoryId) ?? [])), meta: pageMeta(f, total) });
   }),
 );
 
@@ -152,12 +169,11 @@ router.get(
       timelineEntries: { orderBy: { createdAt: 'desc' }, take: 20 },
     });
     const defs = await svc.fieldDefsFor(asset.categoryId);
-    const { customValues, ...rest } = asset;
+    const shaped = shapeCustomFields(asset, defs.fields);
     res.json({
       data: {
-        ...rest,
-        photos: rest.photos.map((p) => ({ ...p, url: `/api/v1/photos/${p.id}/file` })),
-        customFields: svc.shapeCustomFields(defs.fields, customValues),
+        ...shaped,
+        photos: shaped.photos.map((p) => ({ ...p, url: `/api/v1/photos/${p.id}/file` })),
         customFieldDefinitions: defs.fields,
       },
     });
@@ -197,7 +213,7 @@ router.post(
     });
     await audit(req, 'asset.create', 'Asset', asset.id, { code: asset.code });
     const full = await prisma.asset.findUnique({ where: { id: asset.id }, include: listInclude });
-    res.status(201).json({ data: { ...full, customFields: svc.shapeCustomFields(defs.fields, await prisma.assetCustomFieldValue.findMany({ where: { assetId: asset.id } })) } });
+    res.status(201).json({ data: shapeCustomFields(full, defs.fields) });
   }),
 );
 
@@ -247,8 +263,7 @@ router.patch(
     });
     await audit(req, 'asset.update', 'Asset', id, { changes: Object.keys(req.body) });
     const asset = await prisma.asset.findUnique({ where: { id }, include: { ...listInclude, customValues: true } });
-    const { customValues, ...rest } = asset;
-    res.json({ data: { ...rest, customFields: svc.shapeCustomFields(defs.fields, customValues) } });
+    res.json({ data: shapeCustomFields(asset, defs.fields) });
   }),
 );
 

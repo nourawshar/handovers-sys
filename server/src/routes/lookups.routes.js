@@ -16,15 +16,6 @@ const router = express.Router();
 const read = requireCapability('people:read');
 
 router.get(
-  '/departments',
-  read,
-  asyncHandler(async (req, res) => {
-    const data = await prisma.departmentTeam.findMany({ orderBy: [{ type: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }] });
-    res.json({ data });
-  }),
-);
-
-router.get(
   '/work-identities',
   read,
   asyncHandler(async (req, res) => {

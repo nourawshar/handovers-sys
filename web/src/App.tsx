@@ -13,7 +13,7 @@ import EmployeeDetailPage from '@/pages/EmployeeDetailPage'
 import AssignmentDetailPage from '@/pages/assignments/AssignmentDetailPage'
 import ReturnPage from '@/pages/assignments/ReturnPage'
 import GenericAssignPage from '@/pages/assignments/GenericAssignPage'
-import { AssignmentsPage, RoomsPage } from '@/pages/PeoplePages'
+import { AssignmentsPage, DepartmentsPage, RoomsPage } from '@/pages/PeoplePages'
 import CategoriesSettingsPage from '@/pages/settings/CategoriesSettingsPage'
 import UsersSettingsPage from '@/pages/settings/UsersSettingsPage'
 import ReportsPage from '@/pages/reports/ReportsPage'
@@ -45,7 +45,8 @@ export default function App() {
           <Route path="/employees" element={<EmployeesPage />} />
           <Route path="/employees/:id" element={<EmployeeDetailPage />} />
           <Route path="/rooms" element={<RequireRole access="rooms"><RoomsPage /></RequireRole>} />
-          <Route path="/reports" element={<RequireRole access="reports"><ReportsPage /></RequireRole>} />
+                    <Route path="/departments" element={<RequireRole access="departments"><DepartmentsPage /></RequireRole>} />
+                    <Route path="/reports" element={<RequireRole access="reports"><ReportsPage /></RequireRole>} />
           <Route path="/settings/categories" element={<RequireRole access="settings.categories"><CategoriesSettingsPage /></RequireRole>} />
           <Route path="/settings/users" element={<RequireRole access="settings.users"><UsersSettingsPage /></RequireRole>} />
 

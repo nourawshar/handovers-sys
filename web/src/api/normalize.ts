@@ -4,8 +4,8 @@
 import type {
   Account, Asset, BackupStalenessRow, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, ConditionRow,
   Employee, EmployeeHistoryEntry, ListResult, OutstandingAssignmentRow, PhoneAssignmentDetail, Photo, ReportRow, ReturnForm, ReturnResult, Room,
-  RoomCompositionRow, SelectOption, TimelineEntry, User, WhoHasWhatRow, WorkIdentity,
-} from './types'
+    RoomCompositionRow, SelectOption, TimelineEntry, User, WhoHasWhatRow, WorkIdentity, Department,
+    } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type R = Record<string, any>
@@ -203,6 +203,18 @@ export const normRoom = (r: R): Room => ({
   manager: r.managerEmployee ?? r.manager ?? null,
   employeeCount: r._count?.employees ?? r.employeeCount,
   workIdentityCount: r._count?.workIdentities,
+})
+
+export const normDepartment = (d: R): Department => ({
+  id: String(d.id),
+  name: d.name,
+  type: d.type,
+  parentId: d.parentId ?? null,
+  sortOrder: d.sortOrder ?? 0,
+  parent: d.parent ?? null,
+  employeeCount: d._count?.employees ?? d.employeeCount,
+  workIdentityCount: d._count?.workIdentities ?? d.workIdentityCount,
+  childCount: d._count?.children ?? d.childCount,
 })
 
 export const normWorkIdentity = (w: R): WorkIdentity => ({

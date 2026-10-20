@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from './client'
 import {
-  normAccount, normAsset, normAssignment, normAssignmentDetail, normCategories, normEmployee, normEmployeeHistory, normField, normList,
+  normAccount, normAsset, normAssignment, normAssignmentDetail, normCategories, normDepartment, normEmployee, normEmployeeHistory, normField, normList,
   normPhoto, normReportRows, normReturnForm, normReturnResult, normRoom, normTimeline, normUser,
   normWorkIdentity, unwrap,
 } from './normalize'
 import type {
-  Account, AccountSavePayload, Asset, AssignmentDetail, Category, CategoryField, Department, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
+  Account, AccountSavePayload, Asset, AssignmentDetail, Category, CategoryField, Department, DepartmentSavePayload, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
   ReportRow, ReportSlug, ReturnResult, Room, TimelineEntry,
 } from './types'
 
@@ -339,7 +339,33 @@ export function useDepartments() {
   return useQuery({
     queryKey: ['departments'],
     staleTime: 5 * 60_000,
-    queryFn: async () => normList(await api.get('/departments'), (d: R): Department => ({ id: String(d.id), name: d.name, type: d.type })).items,
+    queryFn: async () => normList(await api.get('/departments'), normDepartment).items,
+  })
+}
+
+/** Write payload for POST /departments and PATCH /departments/:id (BE-9). */
+export function useSaveDepartment(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: DepartmentSavePayload): Promise<Department> => {
+      const raw = id ? await api.patch<R>(`/departments/${id}`, p) : await api.post<R>('/departments', p)
+      return normDepartment(unwrap(raw) as R)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['departments'] })
+    },
+  })
+}
+
+export function useDeleteDepartment(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      await api.del(`/departments/${id}`)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['departments'] })
+    },
   })
 }
 

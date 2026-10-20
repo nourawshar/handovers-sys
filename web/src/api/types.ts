@@ -203,6 +203,20 @@ export interface Department {
   id: string
   name: string
   type?: string
+  parentId?: string | null
+  sortOrder?: number
+  parent?: { id: string; name: string } | null
+  employeeCount?: number
+  workIdentityCount?: number
+  childCount?: number
+}
+
+/** Write payload for POST /departments and PATCH /departments/:id (BE-9). */
+export interface DepartmentSavePayload {
+  name: string
+  type: 'CALLCENTER' | 'HOSPITAL'
+  parentId?: string | null
+  sortOrder?: number
 }
 
 /** On-the-fly work identity (CHANGE 4). Sent to POST /assignments/phone + /assignments/generic to upsert the seat. */

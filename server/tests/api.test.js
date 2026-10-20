@@ -278,6 +278,108 @@ test('return flow: return-form → return (discrepancies) → timeline → doubl
   await prisma.$disconnect();
 });
 
+test('BE-9: assets list items expose customFields with phone_number (SIM dots bug)', async () => {
+  const prismaMod = require('../src/db');
+  const admin = await as('admin');
+  // The seeded SIM Cards category has a required phone_number field; grab its field + a SIM asset.
+  const simsCat = await prismaMod.assetCategory.findFirst({ where: { name: 'SIM Cards' }, select: { id: true } });
+  assert.ok(simsCat, 'SIM Cards category seeded');
+  const sim = await prismaMod.asset.findFirst({ where: { categoryId: simsCat.id }, include: { customValues: true } });
+  assert.ok(sim, 'SIM asset seeded');
+  const numField = await prismaMod.assetCategoryField.findFirst({ where: { categoryId: simsCat.id, key: 'phone_number' } });
+  const expectedNumber = sim.customValues.find((v) => v.fieldId === numField.id)?.value;
+
+  // list (paginated) must include customFields.phone_number — no dots / no "SIM1 number required"
+  const list = await admin.req('GET', `/assets?categoryId=${simsCat.id}&pageSize=100`);
+  assert.equal(list.status, 200);
+  const item = list.body.data.find((a) => a.id === sim.id);
+  assert.ok(item, 'SIM asset present in category-filtered list');
+  assert.equal(item.customFields.phone_number, expectedNumber);
+  assert.ok(!('customValues' in item), 'raw EAV rows are not leaked into the list response');
+
+  // raw smoke: some list item shaped at all (customValues rows dropped, customFields map present)
+  const all = await admin.req('GET', '/assets?pageSize=100');
+  assert.ok(all.body.data.every((a) => 'customFields' in a && !('customValues' in a)), 'every list item is shaped without raw rows');
+
+  // detail still shapes the same way
+  const detail = await admin.req('GET', `/assets/${sim.id}`);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.data.customFields.phone_number, expectedNumber);
+
+  await prismaMod.$disconnect();
+});
+
+test('BE-9: departments full CRUD — create/read/patch/delete + 409/400 guards, legacy list shape', async () => {
+  const prismaMod = require('../src/db');
+  const admin = await as('admin');
+  const manager = await as('manager');
+  const name = `BE9-Dept ${Date.now()}`;
+  const parentName = `BE9-Parent ${Date.now()}`;
+
+  // 0) RBAC: writes are Admin-only (people:write); reads open to people:read
+  assert.equal((await manager.req('POST', '/departments', { body: { name } })).status, 403);
+  assert.equal((await manager.req('DELETE', '/departments/00000000-0000-0000-0000-000000000000')).status, 403);
+  assert.equal((await manager.req('GET', '/departments')).status, 200);
+
+  // 1) legacy list shape: bare { data: [...] }, ordered type asc, sortOrder asc, name asc
+  const legacy = await admin.req('GET', '/departments');
+  assert.equal(legacy.status, 200);
+  assert.ok(Array.isArray(legacy.body.data), 'legacy bare array shape preserved');
+  assert.ok(legacy.body.data.length >= 12, 'seed departments present');
+
+  // 2) parent + child; parentId must exist -> 400
+  const parent = await admin.req('POST', '/departments', { body: { name: parentName, type: 'HOSPITAL', sortOrder: 5 } });
+  assert.equal(parent.status, 201);
+  assert.equal(parent.body.data.type, 'HOSPITAL');
+  assert.equal(parent.body.data.sortOrder, 5);
+  const parentId = parent.body.data.id;
+  assert.equal((await admin.req('POST', '/departments', { body: { name: `${name}-orphan`, parentId: '00000000-0000-0000-0000-000000000000' } })).status, 400);
+
+  // 3) create child -> 201, type default CALLCENTER, parent linked
+  const created = await admin.req('POST', '/departments', { body: { name, parentId } });
+  assert.equal(created.status, 201);
+  const dept = created.body.data;
+  assert.equal(dept.type, 'CALLCENTER');
+  assert.equal(dept.parentId, parentId);
+  const id = dept.id;
+
+  // 4) duplicate name -> 409 (P2002)
+  assert.equal((await admin.req('POST', '/departments', { body: { name } })).status, 409);
+
+  // 5) PATCH: rename + type + sortOrder; parent cleared via null -> 200
+  const patched = await admin.req('PATCH', `/departments/${id}`, { body: { name: `${name}-r`, type: 'HOSPITAL', sortOrder: 9, parentId: null } });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.body.data.name, `${name}-r`);
+  assert.equal(patched.body.data.type, 'HOSPITAL');
+  assert.equal(patched.body.data.sortOrder, 9);
+  assert.equal(patched.body.data.parentId, null);
+  // PATCH dangerous guards
+  assert.equal((await admin.req('PATCH', `/departments/${id}`, { body: { parentId: id } })).status, 400, 'self-parent rejected');
+  assert.equal((await admin.req('PATCH', `/departments/${id}`, { body: { parentId: '00000000-0000-0000-0000-000000000000' } })).status, 400, 'unknown parent rejected');
+  assert.equal((await admin.req('PATCH', `/departments/${id}`, { body: { name: parentName } })).status, 409, 'duplicate name on PATCH rejected');
+  // restore clean state
+  const restored = await admin.req('PATCH', `/departments/${id}`, { body: { name, type: 'CALLCENTER', sortOrder: 0 } });
+  assert.equal(restored.status, 200);
+
+  // 6) delete blocked (409) while referenced by an Employee
+  const emp = await prismaMod.employee.create({ data: { fullName: `t-${Date.now()}`, departmentTeamId: id } });
+  assert.equal((await admin.req('DELETE', `/departments/${id}`)).status, 409);
+  await prismaMod.employee.delete({ where: { id: emp.id } });
+
+  // delete blocked (409) while it has a child department
+  const child = await prismaMod.departmentTeam.create({ data: { name: `t-child-${Date.now()}`, type: 'CALLCENTER', parentId: id } });
+  assert.equal((await admin.req('DELETE', `/departments/${id}`)).status, 409);
+  await prismaMod.departmentTeam.delete({ where: { id: child.id } });
+
+  // 7) clean delete -> 204
+  assert.equal((await admin.req('DELETE', `/departments/${id}`)).status, 204);
+  assert.equal((await admin.req('DELETE', `/departments/${parentId}`)).status, 204);
+  const gone = await prismaMod.departmentTeam.count({ where: { id } });
+  assert.equal(gone, 0);
+
+  await prismaMod.$disconnect();
+});
+
 test('phase5: generic assignment + work-identity upsert idempotency + account-by-number lookup', async () => {
   const prisma = require('../src/db');
   const admin = await as('admin');

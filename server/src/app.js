@@ -49,7 +49,8 @@ function createApp() {
   api.use('/photos', require('./routes/photos.routes'));
   api.use('/rooms', require('./routes/rooms.routes')); // BE-7 rooms CRUD (Phase 5) — mounted before lookups
   api.use('/employees', require('./routes/employees.routes')); // BE-6 employees CRUD (Phase 5) — mounted before lookups
-  api.use('/', require('./routes/lookups.routes')); // /departments /work-identities (read-only)
+  api.use('/departments', require('./routes/departments.routes')); // BE-9 departments CRUD (SIM/WhatsApp corrections)
+  api.use('/', require('./routes/lookups.routes')); // /work-identities (read-only)
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

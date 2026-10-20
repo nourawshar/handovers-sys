@@ -77,11 +77,11 @@ const waSchema = (required: boolean) => ({
 })
 
 export const stepSchemas: z.ZodTypeAny[] = [
-  // 1. Employee + work identity (manual name + department; room validated in `next` for call-centers)
+  // 1. Employee + work identity (manual name + department; name/room validated in `next` for call-centers)
   z.object({
     employeeId: z.string().min(1, 'Select an employee'),
     workIdentity: z.object({
-      name: z.string().trim().min(1, 'Work identity name is required'),
+      name: z.string().trim(),
       departmentTeamId: z.string().min(1, 'Select a department'),
       roomId: z.string(),
     }),
@@ -125,16 +125,19 @@ const toNum = (v: string): number | null => (v === '' ? null : Number(v))
 const toStr = (v: string): string | null => (v === '' ? null : v)
 
 /** Builds the §7.6 request body from the draft + selected phone (CHANGE 4: workIdentity instead of workIdentityId). */
-export function buildPhonePayload(draft: WizardDraft): PhoneAssignmentPayload {
+export function buildPhonePayload(draft: WizardDraft, isCallCenter: boolean): PhoneAssignmentPayload {
   const w1 = draft.wa1
   const useSim2 = draft.includeSim2
   const w2 = draft.wa2
   const wi = draft.workIdentity
-  const workIdentity: WorkIdentityInput = {
-    name: wi.name.trim(),
-    departmentTeamId: wi.departmentTeamId || null,
-    roomId: wi.roomId || null,
-  }
+  // Non-call-center identities use the employee's real name — no work identity is sent.
+  const workIdentity: WorkIdentityInput | undefined = isCallCenter
+    ? {
+        name: wi.name.trim(),
+        departmentTeamId: wi.departmentTeamId || null,
+        roomId: wi.roomId || null,
+      }
+    : undefined
   return {
     employeeId: draft.employeeId,
     workIdentityId: undefined,
@@ -189,12 +192,6 @@ export function WaFields({ wa, onChange, required, title, backupEmailOptions = [
     <fieldset className="space-y-4 rounded-lg border border-slate-200 p-4">
       <legend className="px-1 text-sm font-semibold text-slate-900">{title}</legend>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Business WhatsApp?" required={required}>
-          <Select value={wa.business ? 'yes' : 'no'} onChange={(e) => set({ business: e.target.value === 'yes' })}>
-            <option value="yes">Yes — business</option>
-            <option value="no">No — personal</option>
-          </Select>
-        </Field>
         <Field label="Backup Gmail" hint="Gmail account used for WhatsApp backup" required={required}>
           <Select value={wa.backupEmail} onChange={(e) => set({ backupEmail: e.target.value })}>
             <option value="">— select backup Gmail —</option>
@@ -217,7 +214,11 @@ export function WaFields({ wa, onChange, required, title, backupEmailOptions = [
           <Input type="number" min={0} value={wa.chatArchivedCount} onChange={(e) => set({ chatArchivedCount: e.target.value })} placeholder="210" />
         </Field>
         <Field label="App variant" required={required} className="sm:col-span-2">
-          <Select value={wa.appVariant} onChange={(e) => set({ appVariant: e.target.value as WaVariant })}>
+          <Select value={wa.appVariant} onChange={(e) => {
+            const v = e.target.value as WaVariant
+            // Business flag is derived from the app variant (Business/Normal).
+            set({ appVariant: v, business: v === 'BUSINESS' })
+          }}>
             <option value="">—</option>
             {WA_VARIANTS.map((v) => <option key={v} value={v}>{titleCase(v)}</option>)}
           </Select>
@@ -391,11 +392,12 @@ export default function PhoneAssignPage() {
 
   const next = () => {
     const e = validateStep(stepSchemas[step], draft)
-    // Call-center identities require a room (CHANGE 4).
+    // Call-center identities require a work name + room (CHANGE 4).
     if (step === 0) {
       const dept = departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)
-      if (dept?.type === 'CALLCENTER' && !draft.workIdentity.roomId) {
-        e['workIdentity.roomId'] = 'Select a room for call-center identity'
+      if (dept?.type === 'CALLCENTER') {
+        if (!draft.workIdentity.name.trim()) e['workIdentity.name'] = 'Work identity name is required for call-center'
+        if (!draft.workIdentity.roomId) e['workIdentity.roomId'] = 'Select a room for call-center identity'
       }
     }
     setErrors(e)
@@ -407,7 +409,9 @@ export default function PhoneAssignPage() {
   const create = useCreatePhoneAssignment()
 
   const submit = async () => {
-    create.mutate(buildPhonePayload(draft), {
+    const dept = departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)
+    const isCallCenter = dept?.type === 'CALLCENTER'
+    create.mutate(buildPhonePayload(draft, isCallCenter), {
       onSuccess: async (assignment) => {
         // Upload collected photos to the newly created assignment (contract §4.12 pattern).
         if (photos.length) {

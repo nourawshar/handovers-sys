@@ -73,9 +73,10 @@ export default function AssetFormPage() {
   const rooms = useRooms()
   const save = useSaveAsset(id)
 
-  // Fields / phone-ness are read through refs so the resolver always validates against the current category.
+  // Fields / phone-ness / sim-ness are read through refs so the resolver always validates against the current category.
   const fieldsRef = useRef<CategoryField[]>([])
   const phoneRef = useRef(false)
+  const simRef = useRef(false)
   const resolver: Resolver<FormValues> = (values, ctx, opts) => {
     let schema = baseAssetSchema.extend({ custom: buildCustomSchema(fieldsRef.current) })
     if (phoneRef.current) {
@@ -84,8 +85,9 @@ export default function AssetFormPage() {
           imei: z.string().trim().regex(IMEI_RE, 'IMEI must be 14–17 digits'),
         }),
       })
-    } else {
-      // Non-phone categories keep a manually required Name; phones auto-derive it from Make+Model.
+    } else if (!simRef.current) {
+      // Non-phone, non-SIM categories keep a manually required Name; phones auto-derive it from
+      // Make+Model, SIMs from their phone_number.
       schema = schema.extend({
         name: z.string().trim().min(1, 'Name is required').max(200),
       })
@@ -103,6 +105,9 @@ export default function AssetFormPage() {
   const selectedCat = categories.data?.find((c) => c.id === categoryId)
   const isPhone = isPhoneCategory(selectedCat, categories.data?.find((c) => c.id === selectedCat?.parentId))
   phoneRef.current = isPhone
+  // A SIM card category hides the generic fields; only its custom columns (phone_number, carrier, plan, status) show.
+  const isSim = !!selectedCat && /sim/i.test(selectedCat.name)
+  simRef.current = isSim
 
   // Populate when editing (after both asset + its field definitions are known).
   const loadedFor = useRef<string | null>(null)
@@ -143,17 +148,21 @@ export default function AssetFormPage() {
         }
       : undefined
     // Phones auto-derive their Name from Make + Model (fall back to 'Phone' when both are blank,
-    // so the server's min(1) is always satisfied). Non-phones keep the manual required Name.
+    // so the server's min(1) is always satisfied). SIMs derive it from their phone_number.
+    // Non-phones keep the manual required Name.
     const name = isPhone
       ? [v.phone.make?.trim(), v.phone.model?.trim()].filter(Boolean).join(' ') || 'Phone'
-      : v.name.trim()
+      : isSim
+        ? `SIM ${String(v.custom.phone_number ?? '').trim() || 'card'}`
+        : v.name.trim()
     const a = await save.mutateAsync({
       name,
       // The server allows re-categorising via PATCH, but this UI locks the category once created.
       ...(editing ? {} : { categoryId: v.categoryId }),
       serialNumber: v.serialNumber?.trim() || null,
-      qty: Number(v.qty),
-      condition: v.condition,
+      // SIMs hide the generic fields, so send safe defaults (qty 1, NEW condition).
+      qty: isSim ? 1 : Number(v.qty),
+      condition: isSim ? 'NEW' : v.condition,
       roomId: v.roomId || null,
       notes: v.notes?.trim() || null,
       customFields: customToPayload(fields, v.custom),
@@ -185,33 +194,39 @@ export default function AssetFormPage() {
                 {categories.data?.filter((c) => c.isActive).map((c) => <option key={c.id} value={c.id}>{c.parentId ? '— ' : ''}{c.name}</option>)}
               </Select>
             </Field>
-            {isPhone ? (
+            {isSim ? (
+              <p className="text-sm text-slate-500">SIM cards only need their category-specific details below — the name is auto-generated from the phone number.</p>
+            ) : isPhone ? (
               <p className="text-sm text-slate-500">Name is auto-generated from Make + Model.</p>
             ) : (
               <Field label="Name" required error={errors.name?.message}>
                 <Input invalid={!!errors.name} placeholder="e.g. Samsung Galaxy A12" {...register('name')} />
               </Field>
             )}
-            <Field label="Serial number" error={errors.serialNumber?.message}>
-              <Input {...register('serialNumber')} />
-            </Field>
-            <Field label="Condition" required error={errors.condition?.message}>
-              <Select {...register('condition')}>
-                {CONDITIONS.map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
-              </Select>
-            </Field>
-            <Field label="Quantity" required hint="Use more than 1 for bulk consumables" error={errors.qty?.message}>
-              <Input type="number" min={0} invalid={!!errors.qty} {...register('qty')} />
-            </Field>
-            <Field label="Location / room">
-              <Select {...register('roomId')}>
-                <option value="">— None —</option>
-                {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
-              </Select>
-            </Field>
-            <Field label="Notes" className="sm:col-span-2" error={errors.notes?.message}>
-              <Textarea {...register('notes')} />
-            </Field>
+            {!isSim && (
+              <>
+                <Field label="Serial number" error={errors.serialNumber?.message}>
+                  <Input {...register('serialNumber')} />
+                </Field>
+                <Field label="Condition" required error={errors.condition?.message}>
+                  <Select {...register('condition')}>
+                    {CONDITIONS.map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Quantity" required hint="Use more than 1 for bulk consumables" error={errors.qty?.message}>
+                  <Input type="number" min={0} invalid={!!errors.qty} {...register('qty')} />
+                </Field>
+                <Field label="Location / room">
+                  <Select {...register('roomId')}>
+                    <option value="">— None —</option>
+                    {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Notes" className="sm:col-span-2" error={errors.notes?.message}>
+                  <Textarea {...register('notes')} />
+                </Field>
+              </>
+            )}
           </div>
         </section>
 

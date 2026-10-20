@@ -11,6 +11,7 @@ export type RouteKey =
   | 'accounts'
   | 'employees'
   | 'rooms'
+  | 'departments'
   | 'reports'
   | 'settings.categories'
   | 'settings.users'
@@ -32,6 +33,7 @@ export const ROUTE_ACCESS: Record<RouteKey, Role[]> = {
   accounts: ADMIN,
   employees: ALL,
   rooms: MGR,
+  departments: ALL,
   reports: ALL,
   'settings.categories': ADMIN,
   'settings.users': ADMIN,

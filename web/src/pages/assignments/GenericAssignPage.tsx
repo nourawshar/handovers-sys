@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react'
 import { z } from 'zod'
 import { useAssets, useCategories, useCreateGenericAssignment, useDepartments, useEmployees, useRooms } from '@/api/hooks'
-import type { GenericAssignmentPayload } from '@/api/types'
+import type { GenericAssignmentPayload, WorkIdentityInput } from '@/api/types'
 import { CONDITIONS } from '@/api/types'
 import { useDebounce } from '@/lib/useDebounce'
 import { titleCase } from '@/lib/utils'
@@ -32,11 +32,11 @@ const emptyDraft = (): GenericDraft => ({
 const dateOrEmpty = () => z.string().trim().refine((v) => v === '' || !Number.isNaN(new Date(`${v}T00:00:00`).getTime()), 'Enter a valid date')
 
 const stepSchemas: z.ZodTypeAny[] = [
-  // 1. Employee + work identity
+  // 1. Employee + work identity (name/room validated in `next` for call-centers)
   z.object({
     employeeId: z.string().min(1, 'Select an employee'),
     workIdentity: z.object({
-      name: z.string().trim().min(1, 'Work identity name is required'),
+      name: z.string().trim(),
       departmentTeamId: z.string().min(1, 'Select a department'),
       roomId: z.string(),
     }),
@@ -67,17 +67,21 @@ export function validateGenericStep(schema: z.ZodTypeAny, draft: GenericDraft): 
   return out
 }
 
-export function buildGenericPayload(draft: GenericDraft): GenericAssignmentPayload {
+export function buildGenericPayload(draft: GenericDraft, isCallCenter: boolean): GenericAssignmentPayload {
   const wi = draft.workIdentity
+  // Non-call-center identities use the employee's real name — no work identity is sent.
+  const workIdentity: WorkIdentityInput | undefined = isCallCenter
+    ? {
+        name: wi.name.trim(),
+        departmentTeamId: wi.departmentTeamId || null,
+        roomId: wi.roomId || null,
+      }
+    : undefined
   return {
     type: draft.type as string,
     employeeId: draft.employeeId,
     workIdentityId: undefined,
-    workIdentity: {
-      name: wi.name.trim(),
-      departmentTeamId: wi.departmentTeamId || null,
-      roomId: wi.roomId || null,
-    },
+    workIdentity,
     assetId: draft.assetId,
     conditionAtHandover: draft.conditionAtHandover,
     expectedReturnAt: draft.expectedReturnAt || null,
@@ -169,7 +173,10 @@ export default function GenericAssignPage() {
     const e = validateGenericStep(stepSchemas[step], draft)
     if (step === 0) {
       const dept = departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)
-      if (dept?.type === 'CALLCENTER' && !draft.workIdentity.roomId) e['workIdentity.roomId'] = 'Select a room for call-center identity'
+      if (dept?.type === 'CALLCENTER') {
+        if (!draft.workIdentity.name.trim()) e['workIdentity.name'] = 'Work identity name is required for call-center'
+        if (!draft.workIdentity.roomId) e['workIdentity.roomId'] = 'Select a room for call-center identity'
+      }
     }
     setErrors(e)
     if (Object.keys(e).length) return
@@ -180,7 +187,9 @@ export default function GenericAssignPage() {
   const create = useCreateGenericAssignment()
 
   const submit = () => {
-    create.mutate(buildGenericPayload(draft), {
+    const dept = departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)
+    const isCallCenter = dept?.type === 'CALLCENTER'
+    create.mutate(buildGenericPayload(draft, isCallCenter), {
       onSuccess: (assignment) => nav(`/assignments/${assignment.id}`, { replace: true }),
     })
   }

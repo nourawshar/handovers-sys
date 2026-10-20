@@ -13,8 +13,9 @@ export const emptyWorkIdentity = (): WorkIdentityValue => ({ name: '', departmen
 
 /**
  * Manual name + department picker + CONDITIONAL room `<Select>`.
- * The room field is shown only when the chosen department is a call-center (`type === 'CALLCENTER'`);
- * non-call-center identities never show a room and clear any previously chosen one.
+ * The work-name input and the room field are shown only when the chosen department is a
+ * call-center (`type === 'CALLCENTER'`); non-call-center identities use the employee's real
+ * name (no work identity) and never show a room, clearing any previously chosen one.
  */
 export function WorkIdentityFields({ value, onChange, errors, className }: {
   value: WorkIdentityValue
@@ -36,16 +37,23 @@ export function WorkIdentityFields({ value, onChange, errors, className }: {
   const setDepartment = (departmentTeamId: string) => {
     const dept = departments.data?.find((d) => d.id === departmentTeamId)
     const patch: Partial<WorkIdentityValue> = { departmentTeamId }
-    // Non-call-center → no room field; clear any previous room so it isn't sent.
-    if (dept?.type !== 'CALLCENTER') patch.roomId = ''
+    // Non-call-center → no work name / room; clear any previous values so they aren't sent.
+    if (dept?.type !== 'CALLCENTER') {
+      patch.name = ''
+      patch.roomId = ''
+    }
     onChange(patch)
   }
 
   return (
     <div className={`grid gap-4 sm:grid-cols-2 ${className ?? ''}`}>
-      <Field label="Work identity name" hint="e.g. sofia — the seat label" required error={errors.name}>
-        <Input value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="sofia" aria-label="Work identity name" />
-      </Field>
+      {isCallCenter ? (
+        <Field label="Work identity name" hint="e.g. sofia — the seat label" required error={errors.name}>
+          <Input value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="sofia" aria-label="Work identity name" />
+        </Field>
+      ) : (
+        <p className="text-sm text-slate-500">No work identity — the employee's real name is used.</p>
+      )}
       <Field label="Department" required error={errors.departmentTeamId}>
         <Select value={value.departmentTeamId} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
           <option value="">— select department —</option>

@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { Pencil, Plus, X } from 'lucide-react'
-import { useAssignments, useDeleteRoom, useEmployees, useRooms, useSaveRoom } from '@/api/hooks'
-import type { Employee, Room } from '@/api/types'
+import { useAssignments, useDeleteDepartment, useDeleteRoom, useDepartments, useEmployees, useRooms, useSaveDepartment, useSaveRoom } from '@/api/hooks'
+import type { Department, Employee, Room } from '@/api/types'
 import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
 import { can, isAdmin } from '@/lib/permissions'
@@ -226,6 +226,160 @@ export function RoomsPage() {
         </div>
       )}
       {form && <RoomFormModal room={form === 'new' ? null : form} employees={employees.data?.items ?? []} onClose={() => setForm(null)} />}
+    </>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Departments (BE-9) — grouped by type, Admin-only writes            */
+/* ------------------------------------------------------------------ */
+
+const DEPT_TYPES = ['CALLCENTER', 'HOSPITAL'] as const
+type DeptType = (typeof DEPT_TYPES)[number]
+
+/** Create/edit modal (New department / Edit). Writes Admin-only in the caller. */
+function DepartmentFormModal({ dept, departments, onClose }: { dept: Department | null; departments: Department[]; onClose: () => void }) {
+  const isEdit = !!dept
+  const save = useSaveDepartment(dept?.id)
+  const [name, setName] = useState(dept?.name ?? '')
+  const [type, setType] = useState<DeptType>(dept?.type === 'HOSPITAL' ? 'HOSPITAL' : 'CALLCENTER')
+  const [parentId, setParentId] = useState(dept?.parentId ?? '')
+  const [sortOrder, setSortOrder] = useState(dept?.sortOrder != null ? String(dept.sortOrder) : '')
+  const [err, setErr] = useState<string | null>(null)
+
+  // Parent options exclude the department itself (self-parent is rejected server-side anyway).
+  const parentOptions = departments.filter((d) => d.id !== dept?.id)
+
+  const submit = () => {
+    setErr(null)
+    save.mutate(
+      {
+        name: name.trim(),
+        type,
+        parentId: parentId || null,
+        sortOrder: sortOrder === '' ? undefined : Number(sortOrder),
+      },
+      { onError: (e) => setErr((e as Error).message), onSuccess: onClose },
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label={isEdit ? `Edit department ${dept?.name}` : 'New department'}>
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-900">{isEdit ? 'Edit department' : 'New department'}</h2>
+          <button onClick={onClose} aria-label="Close" className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="grid gap-4">
+          <Field label="Name" required>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Reception" autoFocus />
+          </Field>
+          <Field label="Type" required>
+            <Select value={type} onChange={(e) => setType(e.target.value as DeptType)} aria-label="Type">
+              {DEPT_TYPES.map((t) => <option key={t} value={t}>{titleCase(t)}</option>)}
+            </Select>
+          </Field>
+          <Field label="Parent department">
+            <Select value={parentId} onChange={(e) => setParentId(e.target.value)} aria-label="Parent department">
+              <option value="">— No parent —</option>
+              {parentOptions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="Sort order">
+            <Input type="number" min={0} value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} placeholder="0" />
+          </Field>
+          {err && <p className="text-sm text-red-600">{err}</p>}
+        </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} loading={save.isPending} disabled={!name.trim()}>{isEdit ? 'Save changes' : 'Create department'}</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Delete with confirmation; surfaces a 409 (department still referenced) clearly. Admin-only caller. */
+function DeleteDepartmentButton({ dept }: { dept: Department }) {
+  const del = useDeleteDepartment(dept.id)
+  const [err, setErr] = useState<string | null>(null)
+  const confirm = () => {
+    if (!window.confirm(`Delete department "${dept.name}"?\n\nThis cannot be undone.`)) return
+    setErr(null)
+    del.mutate(undefined, {
+      onError: (e) => {
+        const status = (e as ApiError).status
+        setErr(status === 409
+          ? `Cannot delete "${dept.name}" — it is still referenced by an employee, work identity, or child department.`
+          : (e as Error).message)
+      },
+    })
+  }
+  return (
+    <div>
+      <Button size="sm" variant="danger" onClick={confirm} loading={del.isPending}>Delete</Button>
+      {err && <p className="mt-1 text-xs text-red-600">{err}</p>}
+    </div>
+  )
+}
+
+export function DepartmentsPage() {
+  const user = useAuthStore((s) => s.user)
+  const departments = useDepartments()
+  // Reads stay open to ALL via the route (RequireRole access="departments"); writes are Admin-only (people:write).
+  const admin = isAdmin(user)
+  const [form, setForm] = useState<Department | 'new' | null>(null)
+
+  const depts = departments.data ?? []
+  const byType = (t: string) => depts.filter((d) => (d.type ?? 'CALLCENTER') === t)
+
+  return (
+    <>
+      <PageHeader
+        title="Departments"
+        subtitle="Call-center and hospital departments"
+        actions={admin && <Button onClick={() => setForm('new')}><Plus className="h-4 w-4" /> New department</Button>}
+      />
+      {admin && (
+        <p className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+          Creating, editing and deleting departments are Admin-only actions. Managers and team leaders can view departments read-only.
+        </p>
+      )}
+      {departments.isLoading ? <Spinner /> : departments.isError ? <ErrorState error={departments.error} onRetry={() => departments.refetch()} /> : !depts.length ? <div className="card"><EmptyState title="No departments" hint="Admins can create a department with the New department button." /></div> : (
+        <div className="space-y-6">
+          {DEPT_TYPES.map((t) => {
+            const list = byType(t)
+            if (!list.length) return null
+            return (
+              <section key={t}>
+                <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">{titleCase(t)}</h2>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {list.map((d) => (
+                    <div key={d.id} className="card flex flex-col gap-3 p-5">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-lg font-semibold text-slate-900">{d.name}</p>
+                        <Badge tone={d.type === 'HOSPITAL' ? 'blue' : 'violet'}>{titleCase(d.type ?? 'CALLCENTER')}</Badge>
+                      </div>
+                      <div className="text-sm">
+                        {d.parent && <p className="text-slate-500"><span className="font-medium text-slate-700">Parent:</span> {d.parent.name}</p>}
+                        <p className="text-slate-500"><span className="font-medium text-slate-700">Sort order:</span> {d.sortOrder ?? 0}</p>
+                        <p className="mt-0.5 text-slate-500">{d.employeeCount ?? 0} employees · {d.workIdentityCount ?? 0} identities{d.childCount ? ` · ${d.childCount} sub-departments` : ''}</p>
+                      </div>
+                      {admin && (
+                        <div className="mt-auto flex gap-2 border-t border-slate-100 pt-3">
+                          <Button size="sm" variant="secondary" onClick={() => setForm(d)}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
+                          <DeleteDepartmentButton dept={d} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )
+          })}
+        </div>
+      )}
+      {form && <DepartmentFormModal dept={form === 'new' ? null : form} departments={depts} onClose={() => setForm(null)} />}
     </>
   )
 }
