@@ -123,6 +123,21 @@ export interface Account {
   notes: string | null
 }
 
+/** Write payload for POST /accounts and PATCH /accounts/:id (FE-10). `password` is required on
+ * create for GMAIL/WHATSAPP/BITRIX (server enforces, contract §6.2); on edit it is optional and
+ * sent only to rotate. `isActive` is edit-only (create defaults to true server-side). */
+export interface AccountSavePayload {
+  kind: 'GMAIL' | 'WHATSAPP' | 'BITRIX' | 'OTHER'
+  subcategory?: string | null
+  identifier: string
+  email?: string | null
+  password?: string
+  isWhatsAppBackup?: boolean
+  isActive?: boolean
+  assetId?: string | null
+  notes?: string | null
+}
+
 export interface Employee {
   id: string
   fullName: string

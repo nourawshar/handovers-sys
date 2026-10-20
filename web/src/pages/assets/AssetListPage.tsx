@@ -14,7 +14,7 @@ import { ASSET_STATUSES } from '@/api/types'
 
 const PAGE_SIZE = 25
 
-export default function AssetListPage({ phonesOnly = false }: { phonesOnly?: boolean }) {
+export default function AssetListPage() {
   const user = useAuthStore((s) => s.user)
   const [sp, setSp] = useSearchParams()
   const categories = useCategories()
@@ -39,31 +39,27 @@ export default function AssetListPage({ phonesOnly = false }: { phonesOnly?: boo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dq])
 
-  // /phones: restrict to the Phones category (resolved by name) — the server includes its subcategories.
-  const phoneCat = categories.data?.find((c) => !c.parentId && /phone/i.test(c.name))
-  const effectiveCategory = phonesOnly ? phoneCat?.id : categoryId || undefined
-
   const isImei = /^\d{6,17}$/.test(dq)
   const list = useAssets(
     {
       q: isImei ? undefined : dq || undefined,
       imei: isImei ? dq : undefined,
-      categoryId: effectiveCategory,
+      categoryId: categoryId || undefined,
       condition: condition || undefined,
       status: status || undefined,
       holderId: holderId || undefined,
       page,
       pageSize: PAGE_SIZE,
     },
-    !phonesOnly || categories.isSuccess,
+    categories.isSuccess,
   )
   const data = list.data
 
   return (
     <>
       <PageHeader
-        title={phonesOnly ? 'Phones' : 'Assets'}
-        subtitle={phonesOnly ? 'Call-center phones — search by IMEI or asset code' : 'Every IT asset: search by code, IMEI, name, serial or holder'}
+        title="Assets"
+        subtitle="Every IT asset: search by code, IMEI, name, serial or holder"
         actions={can(user?.role, 'assets.new') && (
           <Link to="/assets/new"><Button><Plus className="h-4 w-4" /> New asset</Button></Link>
         )}
@@ -74,12 +70,10 @@ export default function AssetListPage({ phonesOnly = false }: { phonesOnly?: boo
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Code, IMEI, name, serial…" className="pl-9" aria-label="Search assets" />
         </div>
-        {!phonesOnly && (
-          <Select value={categoryId} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
-            <option value="">All categories</option>
-            {categories.data?.map((c) => <option key={c.id} value={c.id}>{c.parentId ? '— ' : ''}{c.name}</option>)}
-          </Select>
-        )}
+        <Select value={categoryId} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
+          <option value="">All categories</option>
+          {categories.data?.map((c) => <option key={c.id} value={c.id}>{c.parentId ? '— ' : ''}{c.name}</option>)}
+        </Select>
         <Select value={condition} onChange={(e) => set({ condition: e.target.value })} aria-label="Condition">
           <option value="">Any condition</option>
           {CONDITIONS.map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
@@ -103,7 +97,7 @@ export default function AssetListPage({ phonesOnly = false }: { phonesOnly?: boo
               <thead className="bg-slate-50">
                 <tr>
                   <th className="th">Code</th><th className="th">Name</th><th className="th">Category</th>
-                  <th className="th">IMEI / Serial</th><th className="th">Condition</th><th className="th">Status</th><th className="th">Holder</th>
+                  <th className="th">IMEI / Serial</th><th className="th">Condition</th><th className="th">Status</th><th className="th">Holder</th><th className="th">View</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -116,6 +110,7 @@ export default function AssetListPage({ phonesOnly = false }: { phonesOnly?: boo
                     <td className="td"><ConditionBadge value={a.condition} /></td>
                     <td className="td"><StatusBadge value={a.status} /></td>
                     <td className="td">{a.currentHolder?.fullName ?? '—'}</td>
+                    <td className="td"><Link to={`/assets/${a.id}`}><Button size="sm" variant="secondary">View</Button></Link></td>
                   </tr>
                 ))}
               </tbody>

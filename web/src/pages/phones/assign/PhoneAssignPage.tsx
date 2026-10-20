@@ -9,7 +9,6 @@ import { WA_VARIANTS } from '@/api/types'
 import { useDebounce } from '@/lib/useDebounce'
 import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Select, Spinner } from '@/components/ui'
-import { SimNumberAutoFill } from './SimNumberAutoFill'
 import { WorkIdentityFields, type WorkIdentityValue } from '@/pages/assignments/WorkIdentityFields'
 
 /* ------------------------------------------------------------------ */
@@ -60,9 +59,9 @@ export const emptyDraft = (): WizardDraft => ({
   bitrixAccountId: '', chargerCableAssetId: '', chargerAdapterAssetId: '', notes: '',
 })
 
-const reqInt = (label: string) => z.string().trim().min(1, `${label} is required`).refine((v) => /^\\d+$/.test(v), `${label} must be a whole number`)
-const optInt = () => z.string().trim().refine((v) => v === '' || /^\\d+$/.test(v), 'Must be a whole number')
-const optEmail = () => z.string().trim().refine((v) => v === '' || /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(v), 'Enter a valid email')
+const reqInt = (label: string) => z.string().trim().min(1, `${label} is required`).refine((v) => /^\d+$/.test(v), `${label} must be a whole number`)
+const optInt = () => z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), 'Must be a whole number')
+const optEmail = () => z.string().trim().refine((v) => v === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), 'Enter a valid email')
 const dateOrEmpty = () => z.string().trim().refine((v) => v === '' || !Number.isNaN(new Date(`${v}T00:00:00`).getTime()), 'Enter a valid date')
 
 const waSchema = (required: boolean) => ({
@@ -182,8 +181,8 @@ const STEP_TITLES = [
 const ACCEPT = 'image/jpeg,image/png,image/webp'
 const MAX_MB = 5
 
-export function WaFields({ wa, onChange, required, title, hidePhoneNumber = false }: {
-  wa: WaState; onChange: (w: WaState) => void; required: boolean; title: string; hidePhoneNumber?: boolean
+export function WaFields({ wa, onChange, required, title, backupEmailOptions = [] }: {
+  wa: WaState; onChange: (w: WaState) => void; required: boolean; title: string; backupEmailOptions?: { value: string; label: string }[]
 }) {
   const set = (patch: Partial<WaState>) => onChange({ ...wa, ...patch })
   return (
@@ -196,13 +195,11 @@ export function WaFields({ wa, onChange, required, title, hidePhoneNumber = fals
             <option value="no">No — personal</option>
           </Select>
         </Field>
-        {!hidePhoneNumber && (
-          <Field label="WhatsApp phone number" required={required}>
-            <Input value={wa.phoneNumber} onChange={(e) => set({ phoneNumber: e.target.value })} placeholder="905369700889" inputMode="tel" />
-          </Field>
-        )}
-        <Field label="Backup email" hint="Email used for WhatsApp backup" required={required}>
-          <Input type="email" value={wa.backupEmail} onChange={(e) => set({ backupEmail: e.target.value })} placeholder="class3447@gmail.com" />
+        <Field label="Backup Gmail" hint="Gmail account used for WhatsApp backup" required={required}>
+          <Select value={wa.backupEmail} onChange={(e) => set({ backupEmail: e.target.value })}>
+            <option value="">— select backup Gmail —</option>
+            {backupEmailOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </Select>
         </Field>
         <Field label="Backup date" required={required}>
           <Input type="date" value={wa.backupDate} onChange={(e) => set({ backupDate: e.target.value })} />
@@ -377,6 +374,21 @@ export default function PhoneAssignPage() {
   const accounts = useAccounts({ kind: 'BITRIX', pageSize: 100 })
   const selectedPhone = useAsset(draft.phoneAssetId || undefined)
 
+  // SIM-card assets (single number source) + Gmail backup accounts (dropdowns).
+  const simCat = categories.data?.find((c) => !c.parentId && /sim/i.test(c.name))
+  const sims = useAssets({ categoryId: simCat?.id, status: 'AVAILABLE', pageSize: 100 }, !!simCat)
+  const gmailBackups = useAccounts({ kind: 'GMAIL', isWhatsAppBackup: true, pageSize: 100 })
+  const gmailOptions = (gmailBackups.data?.items ?? []).map((a) => ({
+    value: a.email || a.identifier,
+    label: a.email || a.identifier,
+  }))
+  const simNumber = (a: { customFields: Record<string, unknown> } | undefined): string => {
+      const v = a?.customFields?.phone_number
+      if (typeof v === 'string') return v
+      if (typeof v === 'number') return String(v)
+      return ''
+    }
+
   const next = () => {
     const e = validateStep(stepSchemas[step], draft)
     // Call-center identities require a room (CHANGE 4).
@@ -421,7 +433,7 @@ export default function PhoneAssignPage() {
 
   return (
     <>
-      <Link to="/phones" className="mb-3 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ArrowLeft className="h-4 w-4" /> Phones</Link>
+      <Link to="/assets" className="mb-3 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ArrowLeft className="h-4 w-4" /> Assets</Link>
       <PageHeader title="Assign a phone" subtitle="7-step wizard matching the sofia handover flow" />
       <div className="grid gap-4 sm:grid-cols-0">
         {/* Step indicator */}
@@ -463,22 +475,27 @@ export default function PhoneAssignPage() {
 
         {step === 2 && (
           <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <SimNumberAutoFill
-                label="SIM 1 / WhatsApp number"
-                required
-                value={draft.sim1Number}
-                error={errors.sim1Number}
-                onChange={(v) => setDraft({ ...draft, sim1Number: v, wa1: { ...draft.wa1, phoneNumber: v } })}
-                onBackupEmail={(email) => setDraft((d) => (email && !d.wa1.backupEmail ? { ...d, wa1: { ...d.wa1, backupEmail: email } } : d))}
-              />
-              <Field label="SIM 1 asset (optional)" error={errors.sim1AssetId}>
-                <Select value={draft.sim1AssetId} onChange={(e) => setDraft({ ...draft, sim1AssetId: e.target.value })}>
-                  <option value="">— no SIM asset —</option>
-                </Select>
-              </Field>
-            </div>
-            <WaFields title="Main WhatsApp" wa={draft.wa1} onChange={(wa1) => setDraft({ ...draft, wa1 })} required hidePhoneNumber />
+            <Field label="SIM card asset" required error={errors.sim1Number}
+              hint="The SIM's number is the single source for both SIM 1 and the main WhatsApp number.">
+              <Select
+                value={draft.sim1AssetId}
+                onChange={(e) => {
+                  const id = e.target.value
+                  const asset = sims.data?.items.find((s) => s.id === id)
+                  const num = simNumber(asset)
+                  setDraft({ ...draft, sim1AssetId: id, sim1Number: num, wa1: { ...draft.wa1, phoneNumber: num } })
+                }}
+              >
+                <option value="">— select SIM card asset —</option>
+                {sims.data?.items.map((s) => (
+                  <option key={s.id} value={s.id}>{s.code} · {s.name} · {simNumber(s) || 'no number'}</option>
+                ))}
+              </Select>
+              {draft.sim1Number && (
+                <p className="mt-1 text-xs text-slate-500">SIM 1 / WhatsApp number: <span className="font-mono font-semibold text-slate-800">{draft.sim1Number}</span></p>
+              )}
+            </Field>
+            <WaFields title="Main WhatsApp" wa={draft.wa1} onChange={(wa1) => setDraft({ ...draft, wa1 })} required backupEmailOptions={gmailOptions} />
           </div>
         )}
 
@@ -490,23 +507,29 @@ export default function PhoneAssignPage() {
               Add a secondary SIM / WhatsApp account
             </label>
             {draft.includeSim2 && (
-              <>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <SimNumberAutoFill
-                    label="SIM 2 / WhatsApp number"
-                    value={draft.sim2Number}
-                    error={errors.sim2Number}
-                    onChange={(v) => setDraft({ ...draft, sim2Number: v, wa2: { ...draft.wa2, phoneNumber: v } })}
-                    onBackupEmail={(email) => setDraft((d) => (email && !d.wa2.backupEmail ? { ...d, wa2: { ...d.wa2, backupEmail: email } } : d))}
-                  />
-                  <Field label="SIM 2 asset (optional)">
-                    <Select value={draft.sim2AssetId} onChange={(e) => setDraft({ ...draft, sim2AssetId: e.target.value })}>
-                      <option value="">— no SIM asset —</option>
-                    </Select>
-                  </Field>
-                </div>
-                <WaFields title="Secondary WhatsApp" wa={draft.wa2} onChange={(wa2) => setDraft({ ...draft, wa2 })} required={false} hidePhoneNumber />
-              </>
+              <div className="space-y-4">
+                <Field label="SIM card asset (secondary)"
+                  hint="The SIM's number is the single source for both SIM 2 and the secondary WhatsApp number.">
+                  <Select
+                    value={draft.sim2AssetId}
+                    onChange={(e) => {
+                      const id = e.target.value
+                      const asset = sims.data?.items.find((s) => s.id === id)
+                      const num = simNumber(asset)
+                      setDraft({ ...draft, sim2AssetId: id, sim2Number: num, wa2: { ...draft.wa2, phoneNumber: num } })
+                    }}
+                  >
+                    <option value="">— select SIM card asset —</option>
+                    {sims.data?.items.map((s) => (
+                      <option key={s.id} value={s.id}>{s.code} · {s.name} · {simNumber(s) || 'no number'}</option>
+                    ))}
+                  </Select>
+                  {draft.sim2Number && (
+                    <p className="mt-1 text-xs text-slate-500">SIM 2 / WhatsApp number: <span className="font-mono font-semibold text-slate-800">{draft.sim2Number}</span></p>
+                  )}
+                </Field>
+                <WaFields title="Secondary WhatsApp" wa={draft.wa2} onChange={(wa2) => setDraft({ ...draft, wa2 })} required={false} backupEmailOptions={gmailOptions} />
+              </div>
             )}
           </div>
         )}

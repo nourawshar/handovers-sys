@@ -7,12 +7,10 @@ export type RouteKey =
   | 'assets.new'
   | 'assets.edit'
   | 'assets.detail'
-  | 'phones'
   | 'assignments'
   | 'accounts'
   | 'employees'
   | 'rooms'
-  | 'workIdentities'
   | 'reports'
   | 'settings.categories'
   | 'settings.users'
@@ -30,12 +28,10 @@ export const ROUTE_ACCESS: Record<RouteKey, Role[]> = {
   'assets.new': ADMIN,
   'assets.edit': ADMIN,
   'assets.detail': ALL,
-  phones: ALL,
   assignments: ALL,
   accounts: ADMIN,
   employees: ALL,
   rooms: MGR,
-  workIdentities: MGR,
   reports: ALL,
   'settings.categories': ADMIN,
   'settings.users': ADMIN,

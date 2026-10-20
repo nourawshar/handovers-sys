@@ -6,7 +6,7 @@ import {
   normWorkIdentity, unwrap,
 } from './normalize'
 import type {
-  Asset, AssignmentDetail, Category, CategoryField, Department, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
+  Account, AccountSavePayload, Asset, AssignmentDetail, Category, CategoryField, Department, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
   ReportRow, ReportSlug, ReturnResult, Room, TimelineEntry,
 } from './types'
 
@@ -150,7 +150,7 @@ export function useAssetTimeline(assetId: string | undefined, page = 1, search =
 }
 
 /* ---------- Accounts ---------- */
-export function useAccounts(filters: { q?: string; kind?: string; identifier?: string; page?: number; pageSize?: number }, enabled = true) {
+export function useAccounts(filters: { q?: string; kind?: string; identifier?: string; subcategory?: string; isWhatsAppBackup?: boolean; page?: number; pageSize?: number }, enabled = true) {
   return useQuery({
     queryKey: ['accounts', filters],
     enabled,
@@ -161,6 +161,45 @@ export function useAccounts(filters: { q?: string; kind?: string; identifier?: s
 
 export function decryptAccount(id: string) {
   return api.get<R>(`/accounts/${id}/decrypt`).then((r) => String((unwrap(r) as R).password ?? ''))
+}
+
+/** Create (id absent) or update (id present) an account. Invalidates the list on save. */
+export function useSaveAccount(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: AccountSavePayload): Promise<Account> => {
+      const raw = id ? await api.patch<R>(`/accounts/${id}`, p) : await api.post<R>('/accounts', p)
+      return normAccount(unwrap(raw) as R)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['accounts'] })
+    },
+  })
+}
+
+export interface DeleteAccountResult {
+  id: string
+  /** true when the account had assignment history and was soft-deleted (deactivated) instead of hard-deleted. */
+  softDeleted: boolean
+}
+
+/**
+ * Delete an account. Hard-deletes (204) or soft-deletes via `{data:{softDeleted:true}}` (200) when
+ * history exists. A 409 is thrown by the client when the account is in use by an active assignment —
+ * the caller surfaces that distinctly from a normal delete.
+ */
+export function useDeleteAccount(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<DeleteAccountResult> => {
+      const raw = await api.del<R>(`/accounts/${id}`)
+      const d = unwrap(raw) as R | null
+      return { id, softDeleted: d?.softDeleted === true }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['accounts'] })
+    },
+  })
 }
 
 /* ---------- People & places ---------- */

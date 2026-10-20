@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  BarChart3, Boxes, DoorOpen, FolderTree, IdCard, KeyRound, LayoutDashboard, LogOut, Menu, Smartphone,
+  BarChart3, Boxes, DoorOpen, FolderTree, KeyRound, LayoutDashboard, LogOut, Menu,
   ClipboardList, Users, UserCog, X, type LucideIcon,
 } from 'lucide-react'
 import { useAuthStore, useUiStore } from '@/store/auth'
@@ -21,8 +21,7 @@ const NAV: NavGroup[] = [
     title: 'Inventory',
     items: [
       { to: '/assets', label: 'Assets', icon: Boxes, access: 'assets' },
-      { to: '/phones', label: 'Phones', icon: Smartphone, access: 'phones' },
-      { to: '/accounts', label: 'Accounts', icon: KeyRound, access: 'accounts' },
+            { to: '/accounts', label: 'Accounts', icon: KeyRound, access: 'accounts' },
     ],
   },
   {
@@ -34,7 +33,6 @@ const NAV: NavGroup[] = [
     items: [
       { to: '/employees', label: 'Employees', icon: Users, access: 'employees' },
       { to: '/rooms', label: 'Rooms', icon: DoorOpen, access: 'rooms' },
-      { to: '/work-identities', label: 'Work identities', icon: IdCard, access: 'workIdentities' },
     ],
   },
   {

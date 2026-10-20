@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Boxes, ClipboardList, KeyRound, Plus, Smartphone, Users, type LucideIcon } from 'lucide-react'
+import { Boxes, ClipboardList, KeyRound, Plus, Users, type LucideIcon } from 'lucide-react'
 import { useAccounts, useAssets, useEmployees } from '@/api/hooks'
 import { useAuthStore } from '@/store/auth'
 import { can, type RouteKey } from '@/lib/permissions'
@@ -30,7 +30,6 @@ export default function DashboardPage() {
   const actions: { to: string; label: string; icon: LucideIcon; access: RouteKey }[] = [
     { to: '/assets/new', label: 'Register asset', icon: Plus, access: 'assets.new' },
     { to: '/assets', label: 'Browse assets', icon: Boxes, access: 'assets' },
-    { to: '/phones', label: 'Phones by IMEI', icon: Smartphone, access: 'phones' },
     { to: '/employees', label: 'Employee directory', icon: Users, access: 'employees' },
   ]
 

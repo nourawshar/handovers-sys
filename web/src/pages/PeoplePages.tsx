@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { Pencil, Plus, X } from 'lucide-react'
-import { useAssignments, useDeleteRoom, useEmployees, useRooms, useSaveRoom, useWorkIdentities } from '@/api/hooks'
+import { useAssignments, useDeleteRoom, useEmployees, useRooms, useSaveRoom } from '@/api/hooks'
 import type { Employee, Room } from '@/api/types'
 import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
@@ -226,32 +226,6 @@ export function RoomsPage() {
         </div>
       )}
       {form && <RoomFormModal room={form === 'new' ? null : form} employees={employees.data?.items ?? []} onClose={() => setForm(null)} />}
-    </>
-  )
-}
-
-export function WorkIdentitiesPage() {
-  const list = useWorkIdentities()
-  return (
-    <>
-      <PageHeader title="Work identities" subtitle="Seat labels attached to phones during an assignment" />
-      <div className="card overflow-hidden">
-        {list.isLoading ? <Spinner /> : list.isError ? <div className="p-4"><ErrorState error={list.error} onRetry={() => list.refetch()} /></div> : !list.data?.items.length ? <EmptyState title="No work identities" /> : (
-          <TableWrap>
-            <thead className="bg-slate-50"><tr><th className="th">Name</th><th className="th">Room</th><th className="th">Status</th><th className="th">Notes</th></tr></thead>
-            <tbody className="divide-y divide-slate-100">
-              {list.data.items.map((w) => (
-                <tr key={w.id} className="hover:bg-slate-50">
-                  <td className="td font-medium text-slate-900">{w.name}</td>
-                  <td className="td">{w.room?.code ?? '—'}</td>
-                  <td className="td">{w.isActive ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>}</td>
-                  <td className="td">{w.notes ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </TableWrap>
-        )}
-      </div>
     </>
   )
 }

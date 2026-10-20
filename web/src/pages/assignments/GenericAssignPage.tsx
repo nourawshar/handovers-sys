@@ -98,9 +98,21 @@ function AssetPicker({ draft, setDraft, errors }: {
     return new Set(c.filter((x) => x.parentId === root.id || x.id === root.id).map((x) => x.id))
   }, [categories.data])
 
+  // Resolve the root category for the chosen asset type (LAPTOP→"Laptops", PRINTER→"Printers",
+  // SIM→"SIM Cards"). GENERAL and empty type have no category filter (all non-phone assets).
+  const typeCategoryId = useMemo(() => {
+    if (!draft.type || draft.type === 'GENERAL') return undefined
+    const c = categories.data ?? []
+    const root = c.find((x) => !x.parentId && new RegExp(draft.type, 'i').test(x.name))
+    return root?.id
+  }, [categories.data, draft.type])
+
   const [q, setQ] = useState('')
   const dq = useDebounce(q)
-  const list = useAssets({ q: dq || undefined, status: 'AVAILABLE', pageSize: 100 })
+  const list = useAssets(
+    { q: dq || undefined, categoryId: typeCategoryId, status: 'AVAILABLE', pageSize: 100 },
+    !!draft.type,
+  )
   const candidates = (list.data?.items ?? []).filter((a) => !phoneCatIds.has(a.categoryId))
   const selected = candidates.find((a) => a.id === draft.assetId)
 
@@ -110,7 +122,9 @@ function AssetPicker({ draft, setDraft, errors }: {
         <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search available assets by code, serial or name…" className="pl-9" aria-label="Search assets" />
       </div>
-      {list.isLoading ? <Spinner /> : list.isError ? <ErrorState error={list.error} /> : candidates.length === 0 ? (
+      {!draft.type ? (
+        <EmptyState title="Pick an asset type first" hint="Choose LAPTOP, PRINTER, SIM or GENERAL above to see matching available assets." />
+      ) : list.isLoading ? <Spinner /> : list.isError ? <ErrorState error={list.error} /> : candidates.length === 0 ? (
         <EmptyState title="No available assets" hint="Create an available asset under Assets before assigning it." action={<Link to="/assets/new"><Button size="sm" variant="secondary">New asset</Button></Link>} />
       ) : (
         <div className="grid gap-2 sm:grid-cols-2">
