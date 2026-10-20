@@ -266,7 +266,26 @@ export function normReturnForm(raw: unknown): ReturnForm {
       sim1Number: str(o.sim1Number), sim2Number: str(o.sim2Number),
       bitrixAccountId: str(o.bitrixAccountId),
       chargerCableAssetId: str(o.chargerCableAssetId), chargerAdapterAssetId: str(o.chargerAdapterAssetId),
+      options: normReturnOptions(x.options),
     },
+    handoverPhotos: Array.isArray(x.handoverPhotos)
+      ? x.handoverPhotos.map(mapPhoto)
+      : Array.isArray(x.photos?.handover) ? x.photos.handover.map(mapPhoto) : [],
+  }
+}
+
+/**
+ * BE-1 `options` arrive at the top of the return-form payload as raw rows:
+ * bitrixAccounts `{id, identifier, email}` → `{value:id, label: email || identifier}`;
+ * charger cable/adapter assets `{id, code, name}` → `{value:id, label: "code — name"}`.
+ */
+export function normReturnOptions(o: R): { bitrixAccounts: SelectOption[]; chargerCables: SelectOption[]; chargerAdapters: SelectOption[] } {
+  const opt = (rows: unknown, labelFn: (r: R) => string): SelectOption[] =>
+    (Array.isArray(rows) ? rows : []).map((r) => ({ value: String(r.id), label: labelFn(r as R) }))
+  return {
+    bitrixAccounts: opt(o?.bitrixAccounts, (r) => (r.email || r.identifier) as string),
+    chargerCables: opt(o?.chargerCables, (r) => `${r.code} — ${r.name}`),
+    chargerAdapters: opt(o?.chargerAdapters, (r) => `${r.code} — ${r.name}`),
   }
 }
 
@@ -281,9 +300,14 @@ export function normReturnResult(raw: unknown): ReturnResult {
   const x = obj(obj(raw)?.data ?? raw) ?? {}
   const comp = Array.isArray(x.comparison) ? x.comparison.map(normComparisonField)
     : Array.isArray(x.discrepancies) ? x.discrepancies.map(normComparisonField) : []
+  const ps = obj(x.photos)
   return {
     assignmentId: String(x.assignmentId), assignmentCode: x.assignmentCode,
     status: x.status ?? 'RETURNED', returnedAt: x.returnedAt ?? null,
     hasDiscrepancies: !!x.hasDiscrepancies, comparison: comp,
+    photos: {
+      handover: Array.isArray(ps?.handover) ? ps!.handover.map(mapPhoto) : [],
+      return: Array.isArray(ps?.return) ? ps!.return.map(mapPhoto) : [],
+    },
   }
 }

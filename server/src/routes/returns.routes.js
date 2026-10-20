@@ -2,12 +2,13 @@
 const express = require('express');
 const { z } = require('zod');
 const prisma = require('../db');
-const { asyncHandler, notFound } = require('../utils/errors');
+const { asyncHandler, notFound, badRequest } = require('../utils/errors');
 const { validate } = require('../middleware/validate');
 const { requireCapability, roomScope } = require('../middleware/rbac');
 const { paginationQuery, paginate, pageMeta } = require('../utils/pagination');
 const { audit } = require('../services/audit.service');
-const { loadAssignment, applyReturn, assertReturnable, comparableKeys } = require('../services/return.service');
+const { upload, persistImages, removeFile } = require('../services/upload.service');
+const { loadAssignment, applyReturn, assertReturnable, comparableKeys, photoSummary, photoSets } = require('../services/return.service');
 
 /**
  * BE-2 (return / handback comparison) + BE-3 (assignment-scoped timeline).
@@ -45,11 +46,31 @@ router.get(
     const assignment = await loadScoped(req.params.id, req);
     assertReturnable(assignment); // 404 / 409 (not ACTIVE)
     const { buildOutSnapshot } = require('../services/return.service');
+    // BE-1: human-readable out (no raw UUIDs) + dropdown options + handover photos.
+    const [bitrixAccounts, chargerCables, chargerAdapters] = await Promise.all([
+      prisma.account.findMany({
+        where: { kind: 'BITRIX', isActive: true },
+        orderBy: [{ email: 'asc' }, { identifier: 'asc' }],
+        select: { id: true, identifier: true, email: true },
+      }),
+      prisma.asset.findMany({
+        where: { category: { name: 'Charger Cables' } },
+        orderBy: { code: 'asc' },
+        select: { id: true, code: true, name: true, status: true },
+      }),
+      prisma.asset.findMany({
+        where: { category: { name: 'Charger Adapters' } },
+        orderBy: { code: 'asc' },
+        select: { id: true, code: true, name: true, status: true },
+      }),
+    ]);
     res.json({
       data: {
         assignmentId: assignment.id,
         assignmentCode: assignment.assignmentCode,
         out: buildOutSnapshot(assignment),
+        options: { bitrixAccounts, chargerCables, chargerAdapters },
+        handoverPhotos: (assignment.photos ?? []).filter((p) => p.context !== 'RETURN').map(photoSummary),
       },
     });
   }),
@@ -89,8 +110,37 @@ router.post(
         returnedAt: new Date(),
         hasDiscrepancies: result.hasDiscrepancies,
         discrepancies: result.comparison,
+        photos: photoSets(assignment), // BE-1: handover vs return images
       },
     });
+  }),
+);
+
+// POST /api/v1/assignments/:id/return/photos — re-upload front/back at return (context RETURN, BE-1)
+router.post(
+  '/:id/return/photos',
+  write,
+  validate({ params: idParams }),
+  upload.array('photos', 10),
+  asyncHandler(async (req, res) => {
+    const assignment = await loadScoped(req.params.id, req);
+    assertReturnable(assignment); // 404 / 409 (not ACTIVE)
+    if (!req.files?.length) throw badRequest('No images uploaded (multipart field name: "photos")');
+    const type = z.enum(['FRONT', 'BACK', 'CONDITION', 'GENERAL']).default('GENERAL').parse(req.body?.type || undefined);
+    const saved = await persistImages(req.files, 'assignments');
+    const photos = await prisma.$transaction(
+      saved.map((s) =>
+        prisma.photo.create({
+          data: { ...s, type, context: 'RETURN', assignmentId: assignment.id, uploadedById: req.user.id },
+          select: { id: true, type: true, context: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true },
+        }),
+      ),
+    ).catch(async (e) => {
+      await Promise.all(saved.map((s) => removeFile(s.path)));
+      throw e;
+    });
+    await audit(req, 'assignment.return.photo.upload', 'Assignment', assignment.id, { count: photos.length });
+    res.status(201).json({ data: photos.map((p) => ({ ...p, url: `/api/v1/photos/${p.id}/file` })) });
   }),
 );
 

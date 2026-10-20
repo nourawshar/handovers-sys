@@ -49,6 +49,12 @@ enum PhotoType {
   GENERAL
 }
 
+/// Which lifecycle stage a photo documents (BE-1: handover vs return).
+enum PhotoContext {
+  HANDOVER
+  RETURN
+}
+
 enum UserRole {
   ADMIN
   MANAGER
@@ -229,7 +235,9 @@ model Photo {
   assignment   Assignment? @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   accountId    String?    @db.Uuid
   account      Account?   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  type         PhotoType  @default(GENERAL)
+  type         PhotoType    @default(GENERAL)
+  /// HANDOVER (assigned at handover) or RETURN (re-uploaded at return) — BE-1
+  context      PhotoContext @default(HANDOVER)
   fileName     String
   path         String
   mimeType     String

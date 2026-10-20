@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Camera, Pencil, Search } from 'lucide-react'
 import { useAsset, useAssetTimeline, useCategories, useUploadAssetPhotos } from '@/api/hooks'
+import AssignmentDrawer from './AssignmentDrawer'
 import type { Asset, TimelineEntry } from '@/api/types'
 import { useAuthStore } from '@/store/auth'
 import { can } from '@/lib/permissions'
@@ -81,7 +82,7 @@ function PhotosPanel({ asset, canUpload }: { asset: Asset; canUpload: boolean })
   )
 }
 
-export function TimelineList({ assetId, embedded }: { assetId: string; embedded?: TimelineEntry[] | null }) {
+export function TimelineList({ assetId, embedded, onOpenAssignment }: { assetId: string; embedded?: TimelineEntry[] | null; onOpenAssignment: (assignmentId: string) => void }) {
   const [page, setPage] = useState(1)
   const [q, setQ] = useState('')
   const dq = useDebounce(q)
@@ -105,7 +106,7 @@ export function TimelineList({ assetId, embedded }: { assetId: string; embedded?
         <EmptyState title="No history yet" hint="Assignments, returns and updates for this asset will appear here." />
       ) : (
         <ol className="relative ml-2 space-y-5 border-l border-slate-200 pl-6">
-          {entries.map((e) => <TimelineItem key={e.id} e={e} />)}
+          {entries.map((e) => <TimelineItem key={e.id} e={e} onOpenAssignment={onOpenAssignment} />)}
         </ol>
       )}
       {tl.data && !useEmbedded && <Pagination page={tl.data.page} pageSize={tl.data.pageSize} total={tl.data.total} onChange={setPage} />}
@@ -117,7 +118,7 @@ const eventTone: Record<string, 'green' | 'blue' | 'amber' | 'red' | 'violet' | 
   ASSIGNED: 'blue', RETURNED: 'green', REASSIGNED: 'violet', UPDATED: 'slate', DISCREPANCY: 'red', NOTE: 'amber',
 }
 
-function TimelineItem({ e }: { e: TimelineEntry }) {
+function TimelineItem({ e, onOpenAssignment }: { e: TimelineEntry; onOpenAssignment: (assignmentId: string) => void }) {
   const [open, setOpen] = useState(false)
   return (
     <li className="relative">
@@ -130,7 +131,7 @@ function TimelineItem({ e }: { e: TimelineEntry }) {
       <p className="mt-1 text-sm text-slate-700">
         {e.employee ? <>Employee <b>{e.employee.fullName}</b></> : null}
         {e.workIdentity ? <> · identity <b>{e.workIdentity.name}</b></> : null}
-        {e.assignmentId ? <> · <Link to={`/assignments/${e.assignmentId}`} className="text-brand-700 hover:underline">assignment</Link></> : null}
+        {e.assignmentId ? <> · <button onClick={() => onOpenAssignment(e.assignmentId!)} className="text-brand-700 hover:underline">assignment</button></> : null}
       </p>
       {e.snapshot && (
         <>
@@ -145,10 +146,25 @@ function TimelineItem({ e }: { e: TimelineEntry }) {
 export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly?: boolean }) {
   const { id } = useParams()
   const nav = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const user = useAuthStore((s) => s.user)
   const { data, isLoading, isError, error, refetch } = useAsset(id)
   const categories = useCategories()
   const [tab, setTab] = useState<'details' | 'timeline'>(timelineOnly ? 'timeline' : 'details')
+
+  const drawerId = searchParams.get('assignment')
+  const openDrawer = (assignmentId: string) => {
+    // Keep the route on /assets/:id/timeline — only the query param changes, so the
+    // phone timeline scroll position is preserved while the drawer is open.
+    const next = new URLSearchParams(searchParams)
+    next.set('assignment', assignmentId)
+    setSearchParams(next, { replace: true })
+  }
+  const closeDrawer = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('assignment')
+    setSearchParams(next, { replace: true })
+  }
 
   if (isLoading) return <Spinner />
   if (isError || !data) return <ErrorState error={error} onRetry={() => refetch()} />
@@ -178,7 +194,7 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
         onChange={(t) => { setTab(t); nav(t === 'timeline' ? `/assets/${a.id}/timeline` : `/assets/${a.id}`, { replace: true }) }}
       />
 
-      {tab === 'timeline' ? <TimelineList assetId={a.id} embedded={data.timeline} /> : (
+      {tab === 'timeline' ? <TimelineList assetId={a.id} embedded={data.timeline} onOpenAssignment={openDrawer} /> : (
         <div className="grid gap-6 lg:grid-cols-5">
           <div className="space-y-6 lg:col-span-3">
             <div className="card p-5">
@@ -212,6 +228,7 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
           <div className="lg:col-span-2"><PhotosPanel asset={a} canUpload={isAdmin} /></div>
         </div>
       )}
+      {drawerId && <AssignmentDrawer assignmentId={drawerId} onClose={closeDrawer} />}
     </>
   )
 }

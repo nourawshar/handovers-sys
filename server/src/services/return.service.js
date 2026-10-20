@@ -19,7 +19,7 @@ const COMPARABLE_FIELDS = [
   { key: 'sim2Number', label: 'SIM 2 number', kind: 'string', requiredItem: false },
   { key: 'bitrixAccountId', label: 'Bitrix account', kind: 'id', requiredItem: true },
   { key: 'chargerCableAssetId', label: 'Charger cable', kind: 'id', requiredItem: true },
-  { key: 'chargerAdapterAssetId', label: 'Charger adapter', kind: 'id', requiredItem: false },
+  { key: 'chargerAdapterAssetId', label: 'Charger adapter', kind: 'id', requiredItem: true },
   { key: 'wa1ChatNormalCount', label: 'Chat count (normal) · WhatsApp 1', kind: 'number' },
   { key: 'wa1ChatArchivedCount', label: 'Chat count (archived) · WhatsApp 1', kind: 'number' },
   { key: 'wa1BackupDate', label: 'Backup date · WhatsApp 1', kind: 'date' },
@@ -57,6 +57,48 @@ function outField(pd, { key, kind }) {
   return norm(v, kind);
 }
 
+/**
+ * Resolve a kind:'id' comparable field to a human-readable label (BE-1):
+ *  - Bitrix account   → Account.email ?? Account.identifier
+ *  - charger cable/adapter asset → `code — name`
+ * Falls back to the raw stored id only when the referenced row is missing (so the
+ * comparison never falsely treats a present-but-unresolved value as absent).
+ */
+function resolveLabel(pd, f) {
+  const raw = pd?.[f.key];
+  if (f.key === 'bitrixAccountId') {
+    const a = pd?.bitrixAccount;
+    return a ? (a.email || a.identifier) : (raw ?? null);
+  }
+  const rel = f.key === 'chargerCableAssetId' ? 'chargerCableAsset' : f.key === 'chargerAdapterAssetId' ? 'chargerAdapterAsset' : null;
+  const asset = rel ? pd?.[rel] : null;
+  if (asset) return `${asset.code} — ${asset.name}`;
+  return raw ?? null;
+}
+
+/** Return a photo row as a client-safe summary (no on-disk internals). */
+function photoSummary(p) {
+  return {
+    id: p.id,
+    type: p.type,
+    fileName: p.fileName,
+    mimeType: p.mimeType,
+    sizeBytes: p.sizeBytes,
+    context: p.context,
+    createdAt: p.createdAt,
+    url: `/api/v1/photos/${p.id}/file`,
+  };
+}
+
+/** Split a hydrated assignment's photos into handover (HANDOVER) vs return (RETURN) sets (BE-1). */
+function photoSets(assignment) {
+  const photos = assignment.photos ?? [];
+  return {
+    handover: photos.filter((p) => p.context !== 'RETURN').map(photoSummary),
+    return: photos.filter((p) => p.context === 'RETURN').map(photoSummary),
+  };
+}
+
 /** Build the `out` snapshot object for the return form (contract §8.1) from a hydrated assignment. */
 function buildOutSnapshot(assignment) {
   const pd = assignment.phoneDetail ?? {};
@@ -70,7 +112,7 @@ function buildOutSnapshot(assignment) {
   };
   for (const f of COMPARABLE_FIELDS) {
     if (f.key === 'condition') continue; // already set from primary item
-    out[f.key] = outField(pd, f);
+    out[f.key] = f.kind === 'id' ? resolveLabel(pd, f) : outField(pd, f);
   }
   return out;
 }
@@ -133,7 +175,15 @@ async function loadAssignment(id) {
       workIdentity: { select: { id: true, name: true, roomId: true } },
       asset: { select: { id: true, code: true, name: true } },
       items: { include: { asset: { select: { id: true, code: true, name: true } } } },
-      phoneDetail: true,
+      phoneDetail: {
+        include: {
+          bitrixAccount: { select: { id: true, identifier: true, email: true } },
+          chargerCableAsset: { select: { id: true, code: true, name: true } },
+          chargerAdapterAsset: { select: { id: true, code: true, name: true } },
+        },
+      },
+      // BE-1: carry both handover + return photos so the return form / result / timeline can compare old-vs-new.
+      photos: { orderBy: { createdAt: 'asc' }, select: { id: true, type: true, context: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true } },
     },
   });
 }
@@ -175,6 +225,7 @@ async function applyReturn(assignment, { returnCondition, returnNotes, returnSta
     returnNotes: returnNotes ?? null,
     out,
     comparison,
+    photos: photoSets(assignment), // BE-1: handover vs return images for the timeline comparison
   };
 
   return prisma.$transaction(async (tx) => {
@@ -252,4 +303,6 @@ module.exports = {
   loadAssignment,
   applyReturn,
   assertReturnable,
+  photoSummary,
+  photoSets,
 };

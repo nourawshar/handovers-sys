@@ -269,6 +269,26 @@ export function useUploadAssignmentPhotos(assignmentId: string) {
   })
 }
 
+/** Upload return context photos (front/back) — POST /assignments/:id/return/photos (BE-1). */
+export function useUploadReturnPhotos(assignmentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ files, type }: { files: File[]; type: string }): Promise<Photo[]> => {
+      const form = new FormData()
+      form.append('type', type) // text fields must precede files for multer to see them
+      files.forEach((f) => form.append('photos', f))
+      const raw = await api.upload<R>(`/assignments/${assignmentId}/return/photos`, form)
+      const d = unwrap(raw)
+      return (Array.isArray(d) ? d : []).map(normPhoto)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assignment-return-form', assignmentId] })
+      qc.invalidateQueries({ queryKey: ['assignment', assignmentId] })
+      qc.invalidateQueries({ queryKey: ['assignments'] })
+    },
+  })
+}
+
 /** Return submit → POST /assignments/:id/return (contract §8.2). */
 export function useSubmitPhoneReturn(assignmentId: string) {
   const qc = useQueryClient()

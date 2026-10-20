@@ -291,12 +291,20 @@ export interface ReturnOutState {
   bitrixAccountId: string | null
   chargerCableAssetId: string | null
   chargerAdapterAssetId: string | null
+  /** Readable dropdown options for the id fields (BE-1). Absent on older backends. */
+  options?: {
+    bitrixAccounts: SelectOption[]
+    chargerCables: SelectOption[]
+    chargerAdapters: SelectOption[]
+  }
 }
 
 export interface ReturnForm {
   assignmentId: string
   assignmentCode: string
   out: ReturnOutState
+  /** Photos taken at handover (BE-1) — shown old-vs-new against return photos. */
+  handoverPhotos?: Photo[]
 }
 
 /** Return-state submit body (§8.2). Omitted keys = unchanged (copied from out). */
@@ -345,6 +353,8 @@ export interface ReturnResult {
   hasDiscrepancies: boolean
   discrepancies?: ComparisonField[]
   comparison: ComparisonField[]
+  /** Old (handover) vs new (return) image sets (BE-1) — `{handover, return}`. */
+  photos?: { handover?: Photo[]; return?: Photo[] }
 }
 
 export interface ListResult<T> {
