@@ -175,6 +175,60 @@ test('validation & error handler: malformed ids / json / unknown route', async (
   assert.equal((await a.req('GET', '/nope')).status, 404);
 });
 
+test('rooms: full CRUD — create/read/set-manager/delete + 409/400 guards', async () => {
+  const prismaMod = require('../src/db');
+  const admin = await as('admin');
+  const manager = await as('manager');
+  const code = `TST-${Date.now()}`;
+  const emp = await prismaMod.employee.findFirst({ select: { id: true, fullName: true } });
+
+  // 0) RBAC: writes are Admin-only (people:write)
+  assert.equal((await manager.req('POST', '/rooms', { body: { code } })).status, 403);
+  assert.equal((await manager.req('DELETE', '/rooms/00000000-0000-0000-0000-000000000000')).status, 403);
+
+  // 1) create -> 201; teamType defaults CALLCENTER; legacy shape (bare data + _count)
+  const created = await admin.req('POST', '/rooms', { body: { code } });
+  assert.equal(created.status, 201);
+  const room = created.body.data;
+  assert.equal(room.teamType, 'CALLCENTER');
+  assert.equal(room.managerEmployee, null);
+  assert.ok('employees' in room._count && 'workIdentities' in room._count);
+  const id = room.id;
+
+  // 2) list + detail preserve the legacy shape the FE (useRooms) depends on
+  const list = await admin.req('GET', '/rooms');
+  assert.equal(list.status, 200);
+  assert.ok(Array.isArray(list.body.data));
+  assert.ok(list.body.data.some((r) => r.id === id && r.managerEmployee !== undefined && r._count));
+  const detail = await admin.req('GET', `/rooms/${id}`);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.data.id, id);
+
+  // 3) duplicate code -> 409 (P2002)
+  assert.equal((await admin.req('POST', '/rooms', { body: { code } })).status, 409);
+
+  // 4) unknown manager -> 400
+  assert.equal((await admin.req('POST', '/rooms', { body: { code: `${code}-x`, managerEmployeeId: '00000000-0000-0000-0000-000000000000' } })).status, 400);
+
+  // 5) set manager -> 200; clear via null; patch teamType
+  const setMgr = await admin.req('PATCH', `/rooms/${id}`, { body: { managerEmployeeId: emp.id } });
+  assert.equal(setMgr.status, 200);
+  assert.equal(setMgr.body.data.managerEmployee.id, emp.id);
+  assert.equal((await admin.req('PATCH', `/rooms/${id}`, { body: { managerEmployeeId: null } })).body.data.managerEmployee, null);
+  assert.equal((await admin.req('PATCH', `/rooms/${id}`, { body: { teamType: 'HOSPITAL' } })).body.data.teamType, 'HOSPITAL');
+
+  // 6) delete blocked (409) while referenced — here by a WorkIdentity
+  const wi = await prismaMod.workIdentity.create({ data: { name: `t-${Date.now()}`, roomId: id } });
+  assert.equal((await admin.req('DELETE', `/rooms/${id}`)).status, 409);
+  await prismaMod.workIdentity.delete({ where: { id: wi.id } });
+
+  // 7) clean delete -> 204, then 404 on read
+  assert.equal((await admin.req('DELETE', `/rooms/${id}`)).status, 204);
+  assert.equal((await admin.req('GET', `/rooms/${id}`)).status, 404);
+
+  await prismaMod.$disconnect();
+});
+
 test('return flow: return-form → return (discrepancies) → timeline → double-return 409', async () => {
   const { execFileSync } = require('node:child_process');
   const path = require('node:path');
@@ -221,5 +275,101 @@ test('return flow: return-form → return (discrepancies) → timeline → doubl
   const tlUser = await as('tl.tr1');
   assert.equal((await tlUser.req('POST', `/assignments/${id}/return`, { body: { return: {} } })).status, 403);
   assert.equal((await tlUser.req('GET', `/assignments/${id}/timeline`)).status, 200);
+  await prisma.$disconnect();
+});
+
+test('phase5: generic assignment + work-identity upsert idempotency + account-by-number lookup', async () => {
+  const prisma = require('../src/db');
+  const admin = await as('admin');
+
+  // ---- Fixtures from seed ----
+  const laptopsCat = await prisma.assetCategory.findFirst({ where: { name: 'Laptops' }, select: { id: true } });
+  const phonesCat = await prisma.assetCategory.findFirst({ where: { name: 'Phones' }, select: { id: true } });
+  const banko = await prisma.departmentTeam.findFirst({ where: { name: 'Banko' }, select: { id: true } });
+  const cc = await prisma.departmentTeam.findFirst({ where: { name: 'Call Center' }, select: { id: true } });
+  const tr1 = await prisma.room.findFirst({ where: { code: 'TR1' }, select: { id: true } });
+  const ayse = await prisma.employee.findFirst({ where: { fullName: 'Ayse Celik' }, select: { id: true } });
+  const sofia = await prisma.employee.findFirst({ where: { fullName: 'Sofia Petrova' }, select: { id: true } });
+
+  // ---- Create two fresh AVAILABLE laptop assets ----
+  const mkLap = async (tag) => {
+    const r = await admin.req('POST', '/assets', { body: { categoryId: laptopsCat.id, name: `Ph5 Laptop ${Date.now()}${tag}` } });
+    assert.equal(r.status, 201);
+    assert.equal(r.body.data.status, 'AVAILABLE');
+    return r.body.data;
+  };
+  const lap1 = await mkLap('a');
+  const lap2 = await mkLap('b');
+
+  // ---- CHANGE 5: account-by-number lookup ----
+  const found = await admin.req('GET', '/accounts?kind=WHATSAPP&identifier=905369700889');
+  assert.equal(found.status, 200);
+  assert.equal(found.body.data.length, 1);
+  assert.equal(found.body.data[0].identifier, '905369700889');
+  assert.ok('email' in found.body.data[0] && 'isWhatsAppBackup' in found.body.data[0]);
+  const missing = await admin.req('GET', '/accounts?kind=WHATSAPP&identifier=999000111222');
+  assert.equal(missing.status, 200);
+  assert.equal(missing.body.data.length, 0); // empty list, not 404
+
+  // ---- Non-call-center WIP (roomId null) + generic create ----
+  const wid = { name: `Ph5 Seat ${Date.now()}`, departmentTeamId: banko.id, roomId: null };
+  const expReturn = '2027-06-15';
+  const g1 = await admin.req('POST', '/assignments/generic', {
+    body: { type: 'LAPTOP', employeeId: ayse.id, workIdentity: wid, assetId: lap1.id, conditionAtHandover: 'GOOD', expectedReturnAt: expReturn, notes: 'ph5 test' },
+  });
+  assert.equal(g1.status, 201);
+  assert.equal(g1.body.data.status, 'ACTIVE');
+  assert.equal(g1.body.data.type, 'LAPTOP');
+  assert.equal(g1.body.data.workIdentity.name, wid.name);
+  assert.equal(g1.body.data.workIdentity.roomId, null);
+  assert.equal(new Date(g1.body.data.expectedReturnAt).toISOString().slice(0, 10), expReturn);
+  const widId = g1.body.data.workIdentity.id;
+
+  const a1 = await prisma.asset.findUnique({ where: { id: lap1.id }, select: { status: true, currentHolderEmployeeId: true } });
+  assert.equal(a1.status, 'ASSIGNED');
+  assert.equal(a1.currentHolderEmployeeId, ayse.id);
+
+  const tl = (await admin.req('GET', `/assignments/${g1.body.data.id}/timeline?pageSize=20`)).body.data;
+  const assigned = tl.find((e) => e.eventType === 'ASSIGNED');
+  assert.ok(assigned, 'ASSIGNED timeline entry written');
+  assert.equal(assigned.snapshot.phoneDetail, null);
+
+  // ---- WIP upsert idempotency (null-room path): same name+dept → reuse, no duplicate ----
+  const g2 = await admin.req('POST', '/assignments/generic', {
+    body: { type: 'LAPTOP', employeeId: ayse.id, workIdentity: wid, assetId: lap2.id, conditionAtHandover: 'NEW' },
+  });
+  assert.equal(g2.status, 201);
+  assert.equal(g2.body.data.workIdentity.id, widId, 'null-room WIP must be reused, not duplicated');
+  const wids = await prisma.workIdentity.count({ where: { name: wid.name } });
+  assert.equal(wids, 1);
+
+  // ---- Generic guards: dual-active 409, PHONE 400 ----
+  assert.equal(
+    (await admin.req('POST', '/assignments/generic', { body: { type: 'LAPTOP', employeeId: ayse.id, workIdentity: wid, assetId: lap1.id, conditionAtHandover: 'GOOD' } })).status,
+    409,
+  );
+  assert.equal(
+    (await admin.req('POST', '/assignments/generic', { body: { type: 'PHONE', employeeId: ayse.id, assetId: lap2.id, conditionAtHandover: 'GOOD' } })).status,
+    400,
+  );
+
+  // ---- CHANGE 4 via /phone: call-center WIP upsert (name+roomId) idempotent ----
+  const mkPhone = async (tag, imei) => {
+    const r = await admin.req('POST', '/assets', { body: { categoryId: phonesCat.id, name: `Ph5 Phone ${Date.now()}${tag}`, phone: { imei } } });
+    assert.equal(r.status, 201);
+    return r.body.data;
+  };
+  // 14-17 digit IMEIs; rotate a few trailing digits to guarantee uniqueness across runs.
+  const baseImei = `35${String(Date.now()).slice(-12)}`;
+  const p1 = await mkPhone('a', `${baseImei}01`);
+  const p2 = await mkPhone('b', `${baseImei}02`);
+  const ccWip = { name: `Ph5 CC Seat ${Date.now()}`, departmentTeamId: cc.id, roomId: tr1.id };
+  const ph1 = await admin.req('POST', '/assignments/phone', { body: { employeeId: sofia.id, workIdentity: ccWip, phoneAssetId: p1.id } });
+  assert.equal(ph1.status, 201);
+  const ccWipId = ph1.body.data.workIdentity.id;
+  const ph2 = await admin.req('POST', '/assignments/phone', { body: { employeeId: sofia.id, workIdentity: ccWip, phoneAssetId: p2.id } });
+  assert.equal(ph2.status, 201);
+  assert.equal(ph2.body.data.workIdentity.id, ccWipId, 'call-center WIP must be reused via name_roomId upsert');
+
   await prisma.$disconnect();
 });

@@ -58,11 +58,12 @@ async function assertAssetFree(assetId, exceptAccountId) {
 router.get(
   '/',
   read,
-  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), kind: kind.optional(), isActive: boolQuery.optional(), isWhatsAppBackup: boolQuery.optional(), inUse: boolQuery.optional() }) }),
+  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), kind: kind.optional(), identifier: z.string().trim().min(1).max(200).optional(), isActive: boolQuery.optional(), isWhatsAppBackup: boolQuery.optional(), inUse: boolQuery.optional() }) }),
   asyncHandler(async (req, res) => {
     const f = req.validQuery;
     const where = {
       ...(f.kind && { kind: f.kind }),
+      ...(f.identifier && { identifier: f.identifier }),
       ...(f.isActive !== undefined && { isActive: f.isActive }),
       ...(f.isWhatsAppBackup !== undefined && { isWhatsAppBackup: f.isWhatsAppBackup }),
       ...(f.inUse !== undefined && { currentAssignmentId: f.inUse ? { not: null } : null }),

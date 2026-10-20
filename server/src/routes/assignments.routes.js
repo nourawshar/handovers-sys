@@ -16,11 +16,18 @@ const write = requireCapability('assignments:write'); // Admin only
 
 const idParams = z.object({ id: z.uuid() });
 const assignmentType = z.enum(['PHONE', 'LAPTOP', 'PRINTER', 'SIM', 'GENERAL']);
+const genericType = z.enum(['LAPTOP', 'PRINTER', 'SIM', 'GENERAL']); // PHONE goes through /phone
 const assignmentStatus = z.enum(['DRAFT', 'ACTIVE', 'RETURNED', 'CLOSED']);
 const condition = z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED']);
 const waVariant = z.enum(['BUSINESS', 'NORMAL']);
 /** Accepts YYYY-MM-DD or full ISO datetime (contract §7.6 uses date-only). */
 const dateish = z.string().refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid date');
+/** CHANGE 4 — manual work-identity input (create/upsert on-the-fly). */
+const workIdentityInput = z.object({
+  name: z.string().trim().min(1).max(100),
+  departmentTeamId: z.uuid().nullish(),
+  roomId: z.uuid().nullish(),
+});
 
 /** TEAM_LEADER must only reach assignments whose room they manage (fail closed when unscoped). */
 function scoped(scope) {
@@ -154,6 +161,7 @@ const phoneBody = z
   .object({
     employeeId: z.uuid(),
     workIdentityId: z.uuid().nullish(),
+    workIdentity: workIdentityInput.nullish(),
     phoneAssetId: z.uuid(),
     imei: z.string().trim().regex(/^\d{14,17}$/, 'IMEI must be 14-17 digits').nullish(),
     sim1Number: z.string().trim().max(30).nullish(),
@@ -198,6 +206,38 @@ router.post(
 
     const { assignment, phoneDetail, items } = await svc.createPhoneAssignment(b, req.user.id);
     await audit(req, 'assignment.create', 'Assignment', assignment.id, { assignmentCode: assignment.assignmentCode, status: 'ACTIVE', type: 'PHONE' });
+    const full = await prisma.assignment.findUnique({ where: { id: assignment.id }, include: detailInclude });
+    res.status(201).json({ data: full });
+  }),
+);
+
+// POST /api/v1/assignments/generic — create + activate a NON-phone assignment
+// atomically (CHANGE 1, contract §7.6 extension). Must precede /:id routes.
+const genericBody = z
+  .object({
+    type: genericType,
+    employeeId: z.uuid(),
+    workIdentityId: z.uuid().nullish(),
+    workIdentity: workIdentityInput.nullish(),
+    assetId: z.uuid(),
+    conditionAtHandover: condition,
+    expectedReturnAt: dateish.nullish(),
+    notes: z.string().trim().max(5000).nullish(),
+  })
+  .strict();
+
+router.post(
+  '/generic',
+  write,
+  validate({ body: genericBody }),
+  asyncHandler(async (req, res) => {
+    const b = req.body;
+    if (!(await prisma.employee.findUnique({ where: { id: b.employeeId }, select: { id: true } }))) throw badRequest('employeeId does not exist');
+    if (b.workIdentityId && !(await prisma.workIdentity.findUnique({ where: { id: b.workIdentityId }, select: { id: true } }))) throw badRequest('workIdentityId does not exist');
+    if (!(await prisma.asset.findUnique({ where: { id: b.assetId }, select: { id: true } }))) throw badRequest('assetId does not exist');
+
+    const { assignment } = await svc.createGenericAssignment(b, req.user.id);
+    await audit(req, 'assignment.create', 'Assignment', assignment.id, { assignmentCode: assignment.assignmentCode, status: 'ACTIVE', type: assignment.type });
     const full = await prisma.assignment.findUnique({ where: { id: assignment.id }, include: detailInclude });
     res.status(201).json({ data: full });
   }),

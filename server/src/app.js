@@ -47,7 +47,9 @@ function createApp() {
   api.use('/assignments', require('./routes/returns.routes')); // BE-2 return + BE-3 assignment timeline (Phase 2)
   api.use('/reports', require('./routes/reports.routes')); // BE-4 reports + export (Phase 4)
   api.use('/photos', require('./routes/photos.routes'));
-  api.use('/', require('./routes/lookups.routes')); // /rooms /departments /employees /work-identities (read-only, Phase 1)
+  api.use('/rooms', require('./routes/rooms.routes')); // BE-7 rooms CRUD (Phase 5) — mounted before lookups
+  api.use('/employees', require('./routes/employees.routes')); // BE-6 employees CRUD (Phase 5) — mounted before lookups
+  api.use('/', require('./routes/lookups.routes')); // /departments /work-identities (read-only)
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

@@ -78,6 +78,37 @@ async function assertImeiFree(imei, tx = prisma) {
 }
 
 /**
+ * Resolve a WorkIdentity on-the-fly from { name, departmentTeamId, roomId },
+ * creating it or re-activating an existing seat (CHANGE 4, contract §5.10).
+ *
+ * - Call-center identities (roomId set) use the @unique([name, roomId]) upsert.
+ * - Non-call-center identities (roomId null) must NOT use upsert on the compound
+ *   key: Postgres treats NULL as distinct in a unique index, so a NULL-room
+ *   "name_roomId" upsert can never match. We match explicitly on
+ *   name + departmentTeamId via findFirst instead (unique constraint §5.1).
+ *
+ * Returns the resolved WorkIdentity row ({ id, ... }). Caller uses `.id`.
+ */
+async function resolveWorkIdentity({ name, departmentTeamId, roomId }, tx = prisma) {
+  const n = String(name ?? '').trim();
+  if (!n) throw badRequest('workIdentity.name is required');
+  if (roomId) {
+    // Call-center seat: unique index @unique([name, roomId]) matches exactly.
+    return tx.workIdentity.upsert({
+      where: { name_roomId: { name: n, roomId } },
+      update: { departmentTeamId: departmentTeamId ?? null, isActive: true },
+      create: { name: n, departmentTeamId: departmentTeamId ?? null, roomId, isActive: true },
+    });
+  }
+  // Non-call-center: room is null. Match explicitly by name + department.
+  const existing = await tx.workIdentity.findFirst({ where: { name: n, departmentTeamId: departmentTeamId ?? null } });
+  if (existing) {
+    return tx.workIdentity.update({ where: { id: existing.id }, data: { isActive: true, roomId: null } });
+  }
+  return tx.workIdentity.create({ data: { name: n, departmentTeamId: departmentTeamId ?? null, roomId: null, isActive: true } });
+}
+
+/**
  * Build the handover snapshot JSON for a timeline entry (contract §7.6 step 7).
  * Captures the assignment + phoneDetail + item conditions at handover time.
  */
@@ -230,7 +261,7 @@ async function activate(tx, assignmentId, opts) {
  */
 async function createPhoneAssignment(body, userId) {
   const {
-    employeeId, workIdentityId, phoneAssetId, imei,
+    employeeId, workIdentityId, workIdentity, phoneAssetId, imei,
     sim1Number, sim1AssetId,
     wa1Business, wa1PhoneNumber, wa1BackupEmail, wa1BackupDate, wa1BackupUsedGB, wa1BackupTotalGB,
     wa1ChatNormalCount, wa1ChatArchivedCount, wa1AppVariant,
@@ -244,6 +275,9 @@ async function createPhoneAssignment(body, userId) {
   const assetIds = phoneAssetIds({ phoneAssetId, sim1AssetId, sim2AssetId, chargerCableAssetId, chargerAdapterAssetId });
 
   return prisma.$transaction(async (tx) => {
+    // workIdentityId (legacy) takes precedence; otherwise upsert the seat on-the-fly.
+    const wid = workIdentityId ?? (workIdentity && (await resolveWorkIdentity(workIdentity, tx)).id);
+
     // Validate the phone asset is a Phones-category asset.
     const phoneAsset = await tx.asset.findUnique({
       where: { id: phoneAssetId },
@@ -267,7 +301,7 @@ async function createPhoneAssignment(body, userId) {
         assignmentCode: code,
         type: 'PHONE',
         employeeId,
-        workIdentityId: workIdentityId ?? null,
+        workIdentityId: wid ?? null,
         assetId: phoneAssetId,
         status: 'ACTIVE',
         assignedAt: now,
@@ -323,13 +357,13 @@ async function createPhoneAssignment(body, userId) {
     });
 
     // Flip assets to ASSIGNED + holder + room.
-    const workIdentity = workIdentityId ? await tx.workIdentity.findUnique({ where: { id: workIdentityId }, select: { roomId: true } }) : null;
+    const widRoom = wid ? await tx.workIdentity.findUnique({ where: { id: wid }, select: { roomId: true } }) : null;
     await tx.asset.updateMany({
       where: { id: { in: assetIds } },
       data: {
         status: 'ASSIGNED',
         currentHolderEmployeeId: employeeId,
-        ...(workIdentity?.roomId ? { roomId: workIdentity.roomId } : {}),
+        ...(widRoom?.roomId ? { roomId: widRoom.roomId } : {}),
       },
     });
 
@@ -345,7 +379,7 @@ async function createPhoneAssignment(body, userId) {
         assignmentId: assignment.id,
         assetId: phoneAssetId,
         employeeId,
-        workIdentityId: workIdentityId ?? null,
+        workIdentityId: wid ?? null,
         eventType: 'ASSIGNED',
         snapshot,
         createdById: userId,
@@ -356,16 +390,98 @@ async function createPhoneAssignment(body, userId) {
   });
 }
 
+/**
+ * CHANGE 1 — create + activate a NON-phone assignment atomically in one transaction.
+ * Accepts LAPTOP / PRINTER / SIM / GENERAL asset types. PHONE is rejected by the
+ * route-level schema (phones must go through /assignments/phone).
+ *
+ * Flipping the PRIMARY asset to ASSIGNED, setting holder + room from the resolved
+ * work identity, writing an ASSIGNED timeline snapshot (phoneDetail:null),
+ * and honouring expectedReturnAt.
+ *
+ * @returns {Promise<{assignment, items, snapshot}>}
+ */
+async function createGenericAssignment(body, userId) {
+  const {
+    type, employeeId, workIdentityId, workIdentity, assetId,
+    conditionAtHandover, expectedReturnAt, notes,
+  } = body;
+
+  return prisma.$transaction(async (tx) => {
+    // The PRIMARY asset must exist and must not be a Phones-category asset.
+    const asset = await tx.asset.findUnique({ where: { id: assetId }, include: { category: { select: { name: true } } } });
+    if (!asset) throw badRequest('assetId does not exist');
+    if (asset.category.name === 'Phones') throw badRequest('phone assets must be assigned via /assignments/phone');
+
+    // Dual-active guard (asset already part of an ACTIVE assignment).
+    await assertAssetsFree([assetId], tx);
+
+    // workIdentityId (legacy) takes precedence; otherwise upsert the seat on-the-fly.
+    const wid = workIdentityId ?? (workIdentity && (await resolveWorkIdentity(workIdentity, tx)).id);
+
+    const code = await nextAssignmentCode(tx);
+    const now = new Date();
+    const expReturn = expectedReturnAt ? new Date(expectedReturnAt) : new Date(now.getTime() + DEFAULT_RETURN_MONTHS * 30 * 24 * 3600 * 1000);
+
+    const assignment = await tx.assignment.create({
+      data: {
+        assignmentCode: code,
+        type,
+        employeeId,
+        workIdentityId: wid ?? null,
+        assetId,
+        status: 'ACTIVE',
+        assignedAt: now,
+        expectedReturnAt: expReturn,
+        notes: notes ?? null,
+        createdById: userId,
+      },
+    });
+
+    const items = [{ assignmentId: assignment.id, assetId, role: 'PRIMARY', conditionAtHandover, isActive: true }];
+    await tx.assignmentItem.createMany({ data: items });
+
+    // Flip the asset to ASSIGNED + holder + room (from the work identity's room).
+    const widRoom = wid ? await tx.workIdentity.findUnique({ where: { id: wid }, select: { roomId: true } }) : null;
+    await tx.asset.updateMany({
+      where: { id: assetId },
+      data: {
+        status: 'ASSIGNED',
+        currentHolderEmployeeId: employeeId,
+        ...(widRoom?.roomId ? { roomId: widRoom.roomId } : {}),
+      },
+    });
+
+    // ASSIGNED handover snapshot (no phone detail for generic types).
+    const snapshot = buildSnapshot(assignment, null, items);
+    await tx.assignmentTimelineEntry.create({
+      data: {
+        assignmentId: assignment.id,
+        assetId,
+        employeeId,
+        workIdentityId: wid ?? null,
+        eventType: 'ASSIGNED',
+        snapshot,
+        createdById: userId,
+      },
+    });
+
+    return { assignment, items, snapshot };
+  });
+}
+
 module.exports = {
   DEFAULT_RETURN_MONTHS,
   nextAssignmentCode,
   assertAssetsFree,
   assertAccountsFree,
   assertImeiFree,
+  resolveWorkIdentity,
   buildSnapshot,
   phoneAssetIds,
   resolvePhoneAccountIds,
   createDraft,
   activate,
   createPhoneAssignment,
+  createGenericAssignment,
 };
