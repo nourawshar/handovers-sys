@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from './client'
 import {
-  normAccount, normAsset, normAssignment, normAssignmentDetail, normCategories, normEmployee, normField, normList,
+  normAccount, normAsset, normAssignment, normAssignmentDetail, normCategories, normEmployee, normEmployeeHistory, normField, normList,
   normPhoto, normReportRows, normReturnForm, normReturnResult, normRoom, normTimeline, normUser,
   normWorkIdentity, unwrap,
 } from './normalize'
 import type {
-  Asset, AssignmentDetail, Category, CategoryField, Department, ExportFormat, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
-  ReportRow, ReportSlug, ReturnResult, TimelineEntry,
+  Asset, AssignmentDetail, Category, CategoryField, Department, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
+  ReportRow, ReportSlug, ReturnResult, Room, TimelineEntry,
 } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -150,7 +150,7 @@ export function useAssetTimeline(assetId: string | undefined, page = 1, search =
 }
 
 /* ---------- Accounts ---------- */
-export function useAccounts(filters: { q?: string; kind?: string; page?: number; pageSize?: number }, enabled = true) {
+export function useAccounts(filters: { q?: string; kind?: string; identifier?: string; page?: number; pageSize?: number }, enabled = true) {
   return useQuery({
     queryKey: ['accounts', filters],
     enabled,
@@ -172,11 +172,127 @@ export function useEmployees(filters: { q?: string; roomId?: string; departmentT
   })
 }
 
+/** Write payload for POST /employees and PATCH /employees/:id (BE-6; `status` is edit-only). */
+export interface EmployeeSavePayload {
+  fullName: string
+  departmentTeamId?: string | null
+  roomId?: string | null
+  phoneContact?: string | null
+  internalEmail?: string | null
+  notes?: string | null
+  /** Sent only when editing (create defaults to ACTIVE server-side). */
+  status?: string | null
+}
+
+export interface EmployeeDetail {
+  employee: Employee
+  history: EmployeeHistoryEntry[]
+}
+
+/** Single employee + device history (GET /employees/:id, §5.4). */
+export function useEmployee(id?: string) {
+  return useQuery({
+    queryKey: ['employee', id],
+    enabled: !!id,
+    queryFn: async (): Promise<EmployeeDetail> => {
+      const d = unwrap((await api.get<R>(`/employees/${id}`)) as R) as R
+      return {
+        employee: normEmployee(d),
+        history: (Array.isArray(d.history) ? d.history : []).map(normEmployeeHistory),
+      }
+    },
+  })
+}
+
+/** Create (id absent) or update (id present) an employee. Invalidates the list + detail on save. */
+export function useSaveEmployee(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: EmployeeSavePayload): Promise<Employee> => {
+      const raw = id ? await api.patch<R>(`/employees/${id}`, p) : await api.post<R>('/employees', p)
+      return normEmployee(unwrap(raw) as R)
+    },
+    onSuccess: (e) => {
+      qc.invalidateQueries({ queryKey: ['employees'] })
+      qc.invalidateQueries({ queryKey: ['employee', id ?? e.id] })
+    },
+  })
+}
+
+export interface DeleteEmployeeResult {
+  id: string
+  /** true when the employee had history and was soft-deleted (status → LEFT) instead of hard-deleted. */
+  softDeleted: boolean
+}
+
+/**
+ * Delete an employee. Hard-deletes (204) or soft-deletes via `{status:'LEFT'}` (200 `{data:{softDeleted:true}}`).
+ * A 409 is thrown by the client when the employee is a room manager / holds active assets — the caller
+ * surfaces that distinctly from a normal soft delete.
+ */
+export function useDeleteEmployee(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<DeleteEmployeeResult> => {
+      const raw = await api.del<R>(`/employees/${id}`)
+      const d = unwrap(raw) as R | null
+      return { id, softDeleted: d?.softDeleted === true }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['employees'] })
+      qc.removeQueries({ queryKey: ['employee', id] })
+      if (typeof id === 'string') qc.invalidateQueries({ queryKey: ['rooms'] })
+    },
+  })
+}
+
 export function useRooms() {
   return useQuery({
     queryKey: ['rooms'],
     staleTime: 5 * 60_000,
     queryFn: async () => normList(await api.get('/rooms'), normRoom).items,
+  })
+}
+
+/** Write payload for POST /rooms and PATCH /rooms/:id (BE-7; `teamType` defaults CALLCENTER server-side). */
+export interface RoomPayload {
+  code?: string
+  teamType?: 'CALLCENTER' | 'HOSPITAL'
+  managerEmployeeId?: string | null
+}
+
+export function useRoom(id?: string) {
+  return useQuery({
+    queryKey: ['room', id],
+    enabled: !!id,
+    queryFn: async () => normRoom(unwrap((await api.get<R>(`/rooms/${id}`)) as R) as R),
+  })
+}
+
+export function useSaveRoom(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: RoomPayload): Promise<Room> => {
+      const raw = id ? await api.patch<R>(`/rooms/${id}`, p) : await api.post<R>('/rooms', p)
+      return normRoom(unwrap(raw) as R)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rooms'] })
+      if (id) qc.invalidateQueries({ queryKey: ['room', id] })
+    },
+  })
+}
+
+export function useDeleteRoom(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      await api.del(`/rooms/${id}`)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rooms'] })
+      if (id) qc.invalidateQueries({ queryKey: ['room', id] })
+    },
   })
 }
 
@@ -244,6 +360,18 @@ export function useCreatePhoneAssignment() {
   return useMutation({
     mutationFn: async (p: PhoneAssignmentPayload): Promise<AssignmentDetail> => {
       const raw = (await api.post<R>('/assignments/phone', p)) as R
+      return normAssignmentDetail(unwrap(raw) as R)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assignments'] }),
+  })
+}
+
+/** Generic assign → POST /assignments/generic (CHANGE 1, BE-5). Assigns any non-phone asset in one call. */
+export function useCreateGenericAssignment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: GenericAssignmentPayload): Promise<AssignmentDetail> => {
+      const raw = (await api.post<R>('/assignments/generic', p)) as R
       return normAssignmentDetail(unwrap(raw) as R)
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['assignments'] }),

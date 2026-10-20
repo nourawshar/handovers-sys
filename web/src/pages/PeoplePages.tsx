@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
-import { Plus } from 'lucide-react'
-import { useAssignments, useRooms, useWorkIdentities } from '@/api/hooks'
+import { Pencil, Plus, X } from 'lucide-react'
+import { useAssignments, useDeleteRoom, useEmployees, useRooms, useSaveRoom, useWorkIdentities } from '@/api/hooks'
+import type { Employee, Room } from '@/api/types'
+import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
-import { can } from '@/lib/permissions'
+import { can, isAdmin } from '@/lib/permissions'
 import { fmtDate, titleCase } from '@/lib/utils'
-import { Badge, Button, EmptyState, ErrorState, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap } from '@/components/ui'
+import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap } from '@/components/ui'
 
 export function AssignmentsPage() {
   const [status, setStatus] = useState('')
@@ -18,7 +20,10 @@ export function AssignmentsPage() {
         title="Assignments"
         subtitle="Device handovers and their lifecycle"
         actions={can(user?.role, 'assets.new') && (
-          <Link to="/phones/assign"><Button><Plus className="h-4 w-4" /> Assign phone</Button></Link>
+          <>
+            <Link to="/phones/assign"><Button><Plus className="h-4 w-4" /> Assign phone</Button></Link>
+            <Link to="/assignments/new"><Button variant="secondary"><Plus className="h-4 w-4" /> Assign other asset</Button></Link>
+          </>
         )}
       />
       <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
@@ -60,22 +65,167 @@ export function AssignmentsPage() {
   )
 }
 
+const TEAM_TYPES = ['CALLCENTER', 'HOSPITAL'] as const
+type TeamType = (typeof TEAM_TYPES)[number]
+
+/** Shared manager picker options (fetched once via React Query's cache). */
+function managerOptions(employees: Employee[]) {
+  return employees
+    .slice()
+    .sort((a, b) => a.fullName.localeCompare(b.fullName))
+    .map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)
+}
+
+/** Create/edit modal (New room / Edit). Writes Admin-only in the caller. */
+function RoomFormModal({ room, employees, onClose }: { room: Room | null; employees: Employee[]; onClose: () => void }) {
+  const isEdit = !!room
+  const save = useSaveRoom(room?.id)
+  const [code, setCode] = useState(room?.code ?? '')
+  const [teamType, setTeamType] = useState<TeamType>(room?.teamType === 'HOSPITAL' ? 'HOSPITAL' : 'CALLCENTER')
+  const [managerEmployeeId, setManagerId] = useState(room?.managerEmployeeId ?? '')
+  const [err, setErr] = useState<string | null>(null)
+
+  const submit = () => {
+    setErr(null)
+    save.mutate(
+      { code: code.trim(), teamType, managerEmployeeId: managerEmployeeId || null },
+      { onError: (e) => setErr((e as Error).message), onSuccess: onClose },
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label={isEdit ? `Edit room ${room?.code}` : 'New room'}>
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-900">{isEdit ? 'Edit room' : 'New room'}</h2>
+          <button onClick={onClose} aria-label="Close" className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="grid gap-4">
+          <Field label="Code" required>
+            <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. TR1" autoFocus />
+          </Field>
+          <Field label="Team type" required>
+            <Select value={teamType} onChange={(e) => setTeamType(e.target.value as TeamType)} aria-label="Team type">
+              {TEAM_TYPES.map((t) => <option key={t} value={t}>{titleCase(t)}</option>)}
+            </Select>
+          </Field>
+          <Field label="Manager">
+            <Select value={managerEmployeeId} onChange={(e) => setManagerId(e.target.value)} aria-label="Manager">
+              <option value="">— No manager —</option>
+              {managerOptions(employees)}
+            </Select>
+          </Field>
+          {err && <p className="text-sm text-red-600">{err}</p>}
+        </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} loading={save.isPending} disabled={!code.trim()}>{isEdit ? 'Save changes' : 'Create room'}</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Quick inline manager setter on each card → PATCH managerEmployeeId. Admin-only in the caller. */
+function SetManagerSelect({ room, employees }: { room: Room; employees: Employee[] }) {
+  const save = useSaveRoom(room.id)
+  const [err, setErr] = useState<string | null>(null)
+  return (
+    <div>
+      <Select
+        value={room.managerEmployeeId ?? ''}
+        onChange={(e) => {
+          setErr(null)
+          save.mutate(
+            { managerEmployeeId: e.target.value || null },
+            { onError: (er) => setErr((er as Error).message) },
+          )
+        }}
+        disabled={save.isPending}
+        aria-label={`Set manager for ${room.code}`}
+        className="text-xs"
+      >
+        <option value="">— No manager —</option>
+        {managerOptions(employees)}
+      </Select>
+      {err && <p className="mt-1 text-xs text-red-600">{err}</p>}
+    </div>
+  )
+}
+
+/** Delete with confirmation; surfaces a 409 (room still referenced) clearly. Admin-only caller. */
+function DeleteRoomButton({ room }: { room: Room }) {
+  const del = useDeleteRoom(room.id)
+  const [err, setErr] = useState<string | null>(null)
+  const confirm = () => {
+    if (!window.confirm(`Delete room "${room.code}"?\n\nThis cannot be undone.`)) return
+    setErr(null)
+    del.mutate(undefined, {
+      onError: (e) => {
+        const status = (e as ApiError).status
+        setErr(status === 409
+          ? `Cannot delete "${room.code}" — it is still referenced by employees, work identities, users or assets.`
+          : (e as Error).message)
+      },
+    })
+  }
+  return (
+    <div>
+      <Button size="sm" variant="danger" onClick={confirm} loading={del.isPending}>Delete</Button>
+      {err && <p className="mt-1 text-xs text-red-600">{err}</p>}
+    </div>
+  )
+}
+
 export function RoomsPage() {
+  const user = useAuthStore((s) => s.user)
   const rooms = useRooms()
+  const employees = useEmployees({ pageSize: 100 })
+  // Reads stay MGR via the route (RequireRole access="rooms"); writes are Admin-only (people:write).
+  const admin = isAdmin(user)
+  const [form, setForm] = useState<Room | 'new' | null>(null)
+
   return (
     <>
-      <PageHeader title="Rooms" subtitle="Call-center rooms and their managers" />
-      {rooms.isLoading ? <Spinner /> : rooms.isError ? <ErrorState error={rooms.error} onRetry={() => rooms.refetch()} /> : !rooms.data?.length ? <div className="card"><EmptyState title="No rooms" /></div> : (
+      <PageHeader
+        title="Rooms"
+        subtitle="Call-center and hospital rooms and their managers"
+        actions={admin && <Button onClick={() => setForm('new')}><Plus className="h-4 w-4" /> New room</Button>}
+      />
+      {admin && (
+        <p className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+          Creating, editing, setting a manager and deleting rooms are Admin-only actions. Managers and team leaders can view rooms read-only.
+        </p>
+      )}
+      {rooms.isLoading ? <Spinner /> : rooms.isError ? <ErrorState error={rooms.error} onRetry={() => rooms.refetch()} /> : !rooms.data?.length ? <div className="card"><EmptyState title="No rooms" hint="Admins can create a room with the New room button." /></div> : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {rooms.data.map((r) => (
-            <div key={r.id} className="card p-5">
-              <p className="text-xl font-semibold text-slate-900">{r.code}</p>
-              <p className="mt-1 text-sm text-slate-500">Manager: {r.manager?.fullName ?? '—'}</p>
-              {r.employeeCount !== undefined && <p className="mt-0.5 text-sm text-slate-500">{r.employeeCount} employees · {r.workIdentityCount ?? 0} identities</p>}
+            <div key={r.id} className="card flex flex-col gap-3 p-5">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-xl font-semibold text-slate-900">{r.code}</p>
+                <Badge tone={r.teamType === 'HOSPITAL' ? 'blue' : 'violet'}>{titleCase(r.teamType ?? 'CALLCENTER')}</Badge>
+              </div>
+              <div className="text-sm">
+                <p className="text-slate-500"><span className="font-medium text-slate-700">Manager:</span> {r.manager?.fullName ?? '—'}</p>
+                {r.employeeCount !== undefined && <p className="mt-0.5 text-slate-500">{r.employeeCount} employees · {r.workIdentityCount ?? 0} identities</p>}
+              </div>
+              {admin && (
+                <div className="mt-auto space-y-3 border-t border-slate-100 pt-3">
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-slate-600">Set manager</p>
+                    <SetManagerSelect room={r} employees={employees.data?.items ?? []} />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => setForm(r)}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
+                    <DeleteRoomButton room={r} />
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
+      {form && <RoomFormModal room={form === 'new' ? null : form} employees={employees.data?.items ?? []} onClose={() => setForm(null)} />}
     </>
   )
 }

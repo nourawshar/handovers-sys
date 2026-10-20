@@ -3,7 +3,7 @@
 // here (and listed in the handoff) so a future reconciliation is a one-file change.
 import type {
   Account, Asset, BackupStalenessRow, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, ConditionRow,
-  Employee, ListResult, OutstandingAssignmentRow, PhoneAssignmentDetail, Photo, ReportRow, ReturnForm, ReturnResult, Room,
+  Employee, EmployeeHistoryEntry, ListResult, OutstandingAssignmentRow, PhoneAssignmentDetail, Photo, ReportRow, ReturnForm, ReturnResult, Room,
   RoomCompositionRow, SelectOption, TimelineEntry, User, WhoHasWhatRow, WorkIdentity,
 } from './types'
 
@@ -176,6 +176,22 @@ export function normEmployee(x: R): Employee {
     internalEmail: str(x.internalEmail),
     status: x.status ?? 'ACTIVE',
     notes: str(x.notes),
+  }
+}
+
+/** A person's device history row from `GET /employees/:id` (§5.4). Tolerant of nested vs flat fields. */
+export function normEmployeeHistory(h: R): EmployeeHistoryEntry {
+  const asset = obj(h.asset) ?? {}
+  const work = obj(h.workIdentity) ?? {}
+  return {
+    assignmentId: String(h.assignmentId ?? ''),
+    assignmentCode: h.assignmentCode ?? String(h.assignmentId ?? ''),
+    assetCode: h.assetCode ?? asset.code ?? '',
+    assetName: h.assetName ?? asset.name ?? '',
+    workIdentityName: h.workIdentityName ?? work.name ?? str(h.workIdentityId),
+    status: h.status ?? '',
+    assignedAt: str(h.assignedAt),
+    returnedAt: str(h.returnedAt),
   }
 }
 

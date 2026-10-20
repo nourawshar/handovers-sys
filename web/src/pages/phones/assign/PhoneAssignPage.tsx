@@ -3,12 +3,14 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Camera, ChevronLeft, ChevronRight, Check, Loader2, Search, X } from 'lucide-react'
 import { z } from 'zod'
 import { api } from '@/api/client'
-import { useAccounts, useAsset, useAssets, useCategories, useCreatePhoneAssignment, useEmployees, useWorkIdentities } from '@/api/hooks'
-import type { PhoneAssignmentPayload, WaVariant } from '@/api/types'
+import { useAccounts, useAsset, useAssets, useCategories, useCreatePhoneAssignment, useDepartments, useEmployees, useRooms } from '@/api/hooks'
+import type { PhoneAssignmentPayload, WaVariant, WorkIdentityInput } from '@/api/types'
 import { WA_VARIANTS } from '@/api/types'
 import { useDebounce } from '@/lib/useDebounce'
 import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Select, Spinner } from '@/components/ui'
+import { SimNumberAutoFill } from './SimNumberAutoFill'
+import { WorkIdentityFields, type WorkIdentityValue } from '@/pages/assignments/WorkIdentityFields'
 
 /* ------------------------------------------------------------------ */
 /* Draft state (form-shaped) + per-step Zod validation + payload       */
@@ -30,7 +32,7 @@ export interface PhotoPick { type: 'FRONT' | 'BACK'; file: File; url: string }
 
 export interface WizardDraft {
   employeeId: string
-  workIdentityId: string
+  workIdentity: WorkIdentityValue
   phoneAssetId: string
   imei: string
   sim1Number: string
@@ -52,15 +54,15 @@ const emptyWa = (): WaState => ({
 })
 
 export const emptyDraft = (): WizardDraft => ({
-  employeeId: '', workIdentityId: '', phoneAssetId: '', imei: '',
+  employeeId: '', workIdentity: { name: '', departmentTeamId: '', roomId: '' }, phoneAssetId: '', imei: '',
   sim1Number: '', sim1AssetId: '', wa1: emptyWa(),
   includeSim2: false, sim2Number: '', sim2AssetId: '', wa2: emptyWa(),
   bitrixAccountId: '', chargerCableAssetId: '', chargerAdapterAssetId: '', notes: '',
 })
 
-const reqInt = (label: string) => z.string().trim().min(1, `${label} is required`).refine((v) => /^\d+$/.test(v), `${label} must be a whole number`)
-const optInt = () => z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), 'Must be a whole number')
-const optEmail = () => z.string().trim().refine((v) => v === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), 'Enter a valid email')
+const reqInt = (label: string) => z.string().trim().min(1, `${label} is required`).refine((v) => /^\\d+$/.test(v), `${label} must be a whole number`)
+const optInt = () => z.string().trim().refine((v) => v === '' || /^\\d+$/.test(v), 'Must be a whole number')
+const optEmail = () => z.string().trim().refine((v) => v === '' || /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(v), 'Enter a valid email')
 const dateOrEmpty = () => z.string().trim().refine((v) => v === '' || !Number.isNaN(new Date(`${v}T00:00:00`).getTime()), 'Enter a valid date')
 
 const waSchema = (required: boolean) => ({
@@ -76,8 +78,15 @@ const waSchema = (required: boolean) => ({
 })
 
 export const stepSchemas: z.ZodTypeAny[] = [
-  // 1. Employee + work identity
-  z.object({ employeeId: z.string().min(1, 'Select an employee'), workIdentityId: z.string().min(1, 'Select a work identity') }),
+  // 1. Employee + work identity (manual name + department; room validated in `next` for call-centers)
+  z.object({
+    employeeId: z.string().min(1, 'Select an employee'),
+    workIdentity: z.object({
+      name: z.string().trim().min(1, 'Work identity name is required'),
+      departmentTeamId: z.string().min(1, 'Select a department'),
+      roomId: z.string(),
+    }),
+  }),
   // 2. Phone
   z.object({ phoneAssetId: z.string().min(1, 'Select a phone') }),
   // 3. SIM1 + WhatsApp main
@@ -116,14 +125,21 @@ export function validateStep(schema: z.ZodTypeAny, draft: WizardDraft): Record<s
 const toNum = (v: string): number | null => (v === '' ? null : Number(v))
 const toStr = (v: string): string | null => (v === '' ? null : v)
 
-/** Builds the §7.6 request body from the draft + selected phone. */
+/** Builds the §7.6 request body from the draft + selected phone (CHANGE 4: workIdentity instead of workIdentityId). */
 export function buildPhonePayload(draft: WizardDraft): PhoneAssignmentPayload {
   const w1 = draft.wa1
   const useSim2 = draft.includeSim2
   const w2 = draft.wa2
+  const wi = draft.workIdentity
+  const workIdentity: WorkIdentityInput = {
+    name: wi.name.trim(),
+    departmentTeamId: wi.departmentTeamId || null,
+    roomId: wi.roomId || null,
+  }
   return {
     employeeId: draft.employeeId,
-    workIdentityId: draft.workIdentityId,
+    workIdentityId: undefined,
+    workIdentity,
     phoneAssetId: draft.phoneAssetId,
     imei: draft.imei || null,
     sim1Number: toStr(draft.sim1Number),
@@ -166,7 +182,9 @@ const STEP_TITLES = [
 const ACCEPT = 'image/jpeg,image/png,image/webp'
 const MAX_MB = 5
 
-export function WaFields({ wa, onChange, required, title }: { wa: WaState; onChange: (w: WaState) => void; required: boolean; title: string }) {
+export function WaFields({ wa, onChange, required, title, hidePhoneNumber = false }: {
+  wa: WaState; onChange: (w: WaState) => void; required: boolean; title: string; hidePhoneNumber?: boolean
+}) {
   const set = (patch: Partial<WaState>) => onChange({ ...wa, ...patch })
   return (
     <fieldset className="space-y-4 rounded-lg border border-slate-200 p-4">
@@ -178,9 +196,11 @@ export function WaFields({ wa, onChange, required, title }: { wa: WaState; onCha
             <option value="no">No — personal</option>
           </Select>
         </Field>
-        <Field label="WhatsApp phone number" required={required}>
-          <Input value={wa.phoneNumber} onChange={(e) => set({ phoneNumber: e.target.value })} placeholder="905369700889" inputMode="tel" />
-        </Field>
+        {!hidePhoneNumber && (
+          <Field label="WhatsApp phone number" required={required}>
+            <Input value={wa.phoneNumber} onChange={(e) => set({ phoneNumber: e.target.value })} placeholder="905369700889" inputMode="tel" />
+          </Field>
+        )}
         <Field label="Backup email" hint="Email used for WhatsApp backup" required={required}>
           <Input type="email" value={wa.backupEmail} onChange={(e) => set({ backupEmail: e.target.value })} placeholder="class3447@gmail.com" />
         </Field>
@@ -338,7 +358,8 @@ export default function PhoneAssignPage() {
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const employees = useEmployees({ pageSize: 100 })
-  const workIdentities = useWorkIdentities()
+  const departments = useDepartments()
+  const rooms = useRooms()
   const categories = useCategories()
   const chargerCats = useMemo(() => {
     const c = categories.data ?? []
@@ -358,6 +379,13 @@ export default function PhoneAssignPage() {
 
   const next = () => {
     const e = validateStep(stepSchemas[step], draft)
+    // Call-center identities require a room (CHANGE 4).
+    if (step === 0) {
+      const dept = departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)
+      if (dept?.type === 'CALLCENTER' && !draft.workIdentity.roomId) {
+        e['workIdentity.roomId'] = 'Select a room for call-center identity'
+      }
+    }
     setErrors(e)
     if (Object.keys(e).length) return
     setStep((s) => Math.min(s + 1, 6))
@@ -413,19 +441,21 @@ export default function PhoneAssignPage() {
 
       <div className="card p-5 sm:p-6">
         {step === 0 && (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Employee" required error={errors.employeeId}>
+          <div className="space-y-4">
+            <Field label="Employee" required error={errors.employeeId} className="sm:max-w-sm">
               <Select value={draft.employeeId} onChange={(e) => setDraft({ ...draft, employeeId: e.target.value })}>
                 <option value="">— select employee —</option>
                 {employees.data?.items.map((emp) => <option key={emp.id} value={emp.id}>{emp.fullName}</option>)}
               </Select>
             </Field>
-            <Field label="Work identity" hint="e.g. sofia — the seat label" required error={errors.workIdentityId}>
-              <Select value={draft.workIdentityId} onChange={(e) => setDraft({ ...draft, workIdentityId: e.target.value })}>
-                <option value="">— select identity —</option>
-                {workIdentities.data?.items.map((w) => <option key={w.id} value={w.id}>{w.name} {w.room?.code ? `(${w.room.code})` : ''}</option>)}
-              </Select>
-            </Field>
+            <WorkIdentityFields
+              value={draft.workIdentity}
+              onChange={(patch) => setDraft({ ...draft, workIdentity: { ...draft.workIdentity, ...patch } })}
+              errors={errors}
+            />
+            {!rooms.data?.length && departments.data?.some((d) => d.type === 'CALLCENTER') && (
+              <p className="text-xs text-amber-700">No rooms loaded — call-center identities need a room to be selected above.</p>
+            )}
           </div>
         )}
 
@@ -434,16 +464,21 @@ export default function PhoneAssignPage() {
         {step === 2 && (
           <div className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="SIM 1 number (main)" required error={errors.sim1Number}>
-                <Input value={draft.sim1Number} onChange={(e) => setDraft({ ...draft, sim1Number: e.target.value })} placeholder="905369700889" inputMode="tel" />
-              </Field>
+              <SimNumberAutoFill
+                label="SIM 1 / WhatsApp number"
+                required
+                value={draft.sim1Number}
+                error={errors.sim1Number}
+                onChange={(v) => setDraft({ ...draft, sim1Number: v, wa1: { ...draft.wa1, phoneNumber: v } })}
+                onBackupEmail={(email) => setDraft((d) => (email && !d.wa1.backupEmail ? { ...d, wa1: { ...d.wa1, backupEmail: email } } : d))}
+              />
               <Field label="SIM 1 asset (optional)" error={errors.sim1AssetId}>
                 <Select value={draft.sim1AssetId} onChange={(e) => setDraft({ ...draft, sim1AssetId: e.target.value })}>
                   <option value="">— no SIM asset —</option>
                 </Select>
               </Field>
             </div>
-            <WaFields title="Main WhatsApp" wa={draft.wa1} onChange={(wa1) => setDraft({ ...draft, wa1 })} required />
+            <WaFields title="Main WhatsApp" wa={draft.wa1} onChange={(wa1) => setDraft({ ...draft, wa1 })} required hidePhoneNumber />
           </div>
         )}
 
@@ -457,16 +492,20 @@ export default function PhoneAssignPage() {
             {draft.includeSim2 && (
               <>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="SIM 2 number" error={errors.sim2Number}>
-                    <Input value={draft.sim2Number} onChange={(e) => setDraft({ ...draft, sim2Number: e.target.value })} placeholder="905000000000" inputMode="tel" />
-                  </Field>
+                  <SimNumberAutoFill
+                    label="SIM 2 / WhatsApp number"
+                    value={draft.sim2Number}
+                    error={errors.sim2Number}
+                    onChange={(v) => setDraft({ ...draft, sim2Number: v, wa2: { ...draft.wa2, phoneNumber: v } })}
+                    onBackupEmail={(email) => setDraft((d) => (email && !d.wa2.backupEmail ? { ...d, wa2: { ...d.wa2, backupEmail: email } } : d))}
+                  />
                   <Field label="SIM 2 asset (optional)">
                     <Select value={draft.sim2AssetId} onChange={(e) => setDraft({ ...draft, sim2AssetId: e.target.value })}>
                       <option value="">— no SIM asset —</option>
                     </Select>
                   </Field>
                 </div>
-                <WaFields title="Secondary WhatsApp" wa={draft.wa2} onChange={(wa2) => setDraft({ ...draft, wa2 })} required={false} />
+                <WaFields title="Secondary WhatsApp" wa={draft.wa2} onChange={(wa2) => setDraft({ ...draft, wa2 })} required={false} hidePhoneNumber />
               </>
             )}
           </div>
@@ -510,7 +549,8 @@ export default function PhoneAssignPage() {
               photos={photos}
               names={{
                 employee: employees.data?.items.find((e) => e.id === draft.employeeId)?.fullName,
-                identity: workIdentities.data?.items.find((w) => w.id === draft.workIdentityId)?.name,
+                department: departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)?.name,
+                room: rooms.data?.find((r) => r.id === draft.workIdentity.roomId)?.code,
                 phone: selectedPhone.data?.asset?.name,
                 bitrix: accounts.data?.items.find((a) => a.id === draft.bitrixAccountId)?.identifier,
                 cable: cables.data?.items.find((a) => a.id === draft.chargerCableAssetId)?.code,
@@ -570,7 +610,9 @@ export function ReviewSnapshot({ draft, photos, names }: {
   return (
     <dl className="divide-y divide-slate-100">
       {row('Employee', names?.employee ?? draft.employeeId)}
-      {row('Work identity', names?.identity ?? draft.workIdentityId)}
+      {row('Work identity', draft.workIdentity.name || '—')}
+      {row('Department', names?.department ?? draft.workIdentity.departmentTeamId)}
+      {row('Room', names?.room ?? draft.workIdentity.roomId)}
       {row('Phone', names?.phone ? `${names.phone} · ${draft.imei || 'no IMEI'}` : <span className="font-mono">{draft.phoneAssetId}</span>)}
       {row('SIM 1', draft.sim1Number)}
       {row('WhatsApp 1 (main)', `${w1.business ? 'Business' : 'Normal'} · ${w1.phoneNumber || '—'}`)}

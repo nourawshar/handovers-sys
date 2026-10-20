@@ -10,8 +10,10 @@ import AssetFormPage from '@/pages/assets/AssetFormPage'
 import AssetDetailPage from '@/pages/assets/AssetDetailPage'
 import AccountsPage from '@/pages/AccountsPage'
 import EmployeesPage from '@/pages/EmployeesPage'
+import EmployeeDetailPage from '@/pages/EmployeeDetailPage'
 import AssignmentDetailPage from '@/pages/assignments/AssignmentDetailPage'
 import ReturnPage from '@/pages/assignments/ReturnPage'
+import GenericAssignPage from '@/pages/assignments/GenericAssignPage'
 import { AssignmentsPage, RoomsPage, WorkIdentitiesPage } from '@/pages/PeoplePages'
 import CategoriesSettingsPage from '@/pages/settings/CategoriesSettingsPage'
 import UsersSettingsPage from '@/pages/settings/UsersSettingsPage'
@@ -37,11 +39,13 @@ export default function App() {
                     <Route path="/phones/assign" element={<RequireRole access="assets.new"><PhoneAssignPage /></RequireRole>} />
 
                     <Route path="/assignments" element={<AssignmentsPage />} />
+                    <Route path="/assignments/new" element={<RequireRole access="assets.new"><GenericAssignPage /></RequireRole>} />
                     <Route path="/assignments/:id" element={<AssignmentDetailPage />} />
                     <Route path="/assignments/:id/return" element={<RequireRole access="assets.new"><ReturnPage /></RequireRole>} />
 
           <Route path="/accounts" element={<RequireRole access="accounts"><AccountsPage /></RequireRole>} />
           <Route path="/employees" element={<EmployeesPage />} />
+          <Route path="/employees/:id" element={<EmployeeDetailPage />} />
           <Route path="/rooms" element={<RequireRole access="rooms"><RoomsPage /></RequireRole>} />
           <Route path="/work-identities" element={<RequireRole access="workIdentities"><WorkIdentitiesPage /></RequireRole>} />
           <Route path="/reports" element={<RequireRole access="reports"><ReportsPage /></RequireRole>} />

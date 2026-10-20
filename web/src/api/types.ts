@@ -134,7 +134,21 @@ export interface Employee {
   internalEmail: string | null
   status: 'ACTIVE' | 'LEFT' | 'ON_LEAVE' | string
   notes: string | null
+}
 
+export const EMPLOYEE_STATUSES = ['ACTIVE', 'LEFT', 'ON_LEAVE'] as const
+export type EmployeeStatus = (typeof EMPLOYEE_STATUSES)[number]
+
+/** A single device assignment a person has been part of (from GET /employees/:id → `history`). */
+export interface EmployeeHistoryEntry {
+  assignmentId: string
+  assignmentCode: string
+  assetCode: string
+  assetName: string
+  workIdentityName: string | null
+  status: string
+  assignedAt: string | null
+  returnedAt: string | null
 }
 
 export interface Room {
@@ -174,6 +188,13 @@ export interface Department {
   id: string
   name: string
   type?: string
+}
+
+/** On-the-fly work identity (CHANGE 4). Sent to POST /assignments/phone + /assignments/generic to upsert the seat. */
+export interface WorkIdentityInput {
+  name: string
+  departmentTeamId?: string | null
+  roomId?: string | null
 }
 
 /* ---------- Phone assignment (contract §7.2, §7.6, README §3.2) ---------- */
@@ -233,7 +254,7 @@ export interface AssignmentDetail extends Assignment {
 /** Request body for the core wizard submit, `POST /assignments/phone` (§7.6). */
 export interface PhoneAssignmentPayload {
   employeeId: string
-  workIdentityId: string
+  workIdentityId?: string | null
   phoneAssetId: string
   imei: string | null
   sim1Number?: string | null
@@ -261,6 +282,20 @@ export interface PhoneAssignmentPayload {
   bitrixAccountId?: string | null
   chargerCableAssetId?: string | null
   chargerAdapterAssetId?: string | null
+  expectedReturnAt?: string | null
+  notes?: string | null
+  /** On-the-fly work identity (CHANGE 4) — a manually typed name + department (+ room for call-centers). */
+  workIdentity?: WorkIdentityInput
+}
+
+/** Request body for `POST /assignments/generic` — any non-phone asset (CHANGE 1, BE-5). */
+export interface GenericAssignmentPayload {
+  type: string
+  employeeId: string
+  workIdentityId?: string | null
+  workIdentity?: WorkIdentityInput
+  assetId: string
+  conditionAtHandover: string
   expectedReturnAt?: string | null
   notes?: string | null
 }
