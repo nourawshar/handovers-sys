@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, ArrowRightLeft, Camera } from 'lucide-react'
+import { ArrowLeft, ArrowRightLeft, Camera, Printer } from 'lucide-react'
 import { useAssignmentDetail, useAssignmentTimeline } from '@/api/hooks'
 import type { PhoneAssignmentDetail } from '@/api/types'
 import { useAuthStore } from '@/store/auth'
@@ -101,9 +101,12 @@ export default function AssignmentDetailPage() {
             {a.workIdentity && <span className="text-sm text-slate-500">· {a.workIdentity.name}</span>}
           </div>
         </div>
-        {isAdmin && a.status === 'ACTIVE' && (
-          <Link to={`/assignments/${a.id}/return`}><Button><ArrowRightLeft className="h-4 w-4" /> Return device</Button></Link>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Link to={`/assignments/${a.id}/receipt`}><Button variant="secondary"><Printer className="h-4 w-4" /> Print receipt</Button></Link>
+          {isAdmin && a.status === 'ACTIVE' && (
+            <Link to={`/assignments/${a.id}/return`}><Button><ArrowRightLeft className="h-4 w-4" /> Return device</Button></Link>
+          )}
+        </div>
       </div>
 
       <Tabs

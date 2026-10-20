@@ -1,0 +1,20 @@
+'use strict';
+require('dotenv').config();
+(async () => {
+  const base = 'http://localhost:4000/api/v1';
+  const login = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: process.env.SEED_ADMIN_PASSWORD }) });
+  const lj = await login.json();
+  const tok = lj.accessToken;
+  const H = { Authorization: `Bearer ${tok}` };
+  const emp = await (await fetch(base + '/employees?limit=1', { headers: H })).json();
+  const asg = await (await fetch(base + '/assignments?limit=1', { headers: H })).json();
+  const acc = await (await fetch(base + '/accounts?limit=1', { headers: H })).json();
+  const assets = await (await fetch(base + '/assets?limit=1', { headers: H })).json();
+  console.log('login user:', lj.user?.username, lj.user?.role);
+  console.log('employees meta:', JSON.stringify(emp.meta));
+  console.log('assignments meta:', JSON.stringify(asg.meta));
+  console.log('accounts meta:', JSON.stringify(acc.meta));
+  console.log('assets meta:', JSON.stringify(assets.meta));
+  console.log('sample employee:', emp.data?.[0]?.fullName, '| room:', emp.data?.[0]?.room?.code);
+  console.log('sample assignment:', asg.data?.[0]?.assignmentCode, asg.data?.[0]?.type, asg.data?.[0]?.status, '| asset:', asg.data?.[0]?.asset?.name);
+})().catch((e) => { console.error(e); process.exit(1); });

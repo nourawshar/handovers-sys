@@ -274,7 +274,16 @@ async function createPhoneAssignment(body, userId) {
 
   const assetIds = phoneAssetIds({ phoneAssetId, sim1AssetId, sim2AssetId, chargerCableAssetId, chargerAdapterAssetId });
 
-  return prisma.$transaction(async (tx) => {
+    // SIM-single-source invariant (SIM_WHATSAPP_CORRECTIONS_PLAN): the SIM number and the
+    // WhatsApp number must be the same. Enforce server-side so a bad client can't corrupt the record.
+    if (sim1Number && wa1PhoneNumber && String(sim1Number).trim() !== String(wa1PhoneNumber).trim()) {
+      throw badRequest('sim1Number and wa1PhoneNumber must be equal (the SIM number is the single source)');
+    }
+    if (sim2Number && wa2PhoneNumber && String(sim2Number).trim() !== String(wa2PhoneNumber).trim()) {
+      throw badRequest('sim2Number and wa2PhoneNumber must be equal (the SIM number is the single source)');
+    }
+
+    return prisma.$transaction(async (tx) => {
     // workIdentityId (legacy) takes precedence; otherwise upsert the seat on-the-fly.
     const wid = workIdentityId ?? (workIdentity && (await resolveWorkIdentity(workIdentity, tx)).id);
 

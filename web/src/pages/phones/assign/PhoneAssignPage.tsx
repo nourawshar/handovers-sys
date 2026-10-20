@@ -243,7 +243,7 @@ function PhonePicker({ draft, setDraft, errors }: {
   draft: WizardDraft; setDraft: (d: WizardDraft) => void; errors: Record<string, string>
 }) {
   const categories = useCategories()
-  const phoneCat = categories.data?.find((c) => !c.parentId && /phone/i.test(c.name))
+  const phoneCat = categories.data?.find((c) => !c.parentId && /^phones$/i.test(c.name))
   const [q, setQ] = useState('')
   const dq = useDebounce(q)
   const list = useAssets(

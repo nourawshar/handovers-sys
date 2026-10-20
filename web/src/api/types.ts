@@ -260,6 +260,10 @@ export interface PhoneAssignmentDetail {
   bitrixAccountId: string | null
   chargerCableAssetId: string | null
   chargerAdapterAssetId: string | null
+  /** Hydrated relations (BE-16). Absent on older backends → receipt falls back to the raw ids above. */
+  bitrixAccount?: { id: string; identifier: string | null; email: string | null } | null
+  chargerCableAsset?: { id: string; code: string; name: string } | null
+  chargerAdapterAsset?: { id: string; code: string; name: string } | null
   notes?: string | null
 }
 

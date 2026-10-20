@@ -254,7 +254,17 @@ export function normPhoneAssignmentDetail(p: R): PhoneAssignmentDetail {
     wa2ChatNormalCount: num(x.wa2ChatNormalCount), wa2ChatArchivedCount: num(x.wa2ChatArchivedCount),
     wa2AppVariant: x.wa2AppVariant ?? null,
     bitrixAccountId: str(x.bitrixAccountId), chargerCableAssetId: str(x.chargerCableAssetId),
-    chargerAdapterAssetId: str(x.chargerAdapterAssetId), notes: str(x.notes),
+    chargerAdapterAssetId: str(x.chargerAdapterAssetId),
+    bitrixAccount: obj(x.bitrixAccount)
+      ? { id: String(x.bitrixAccount.id), identifier: str(x.bitrixAccount.identifier), email: str(x.bitrixAccount.email) }
+      : null,
+    chargerCableAsset: obj(x.chargerCableAsset)
+      ? { id: String(x.chargerCableAsset.id), code: x.chargerCableAsset.code, name: x.chargerCableAsset.name }
+      : null,
+    chargerAdapterAsset: obj(x.chargerAdapterAsset)
+      ? { id: String(x.chargerAdapterAsset.id), code: x.chargerAdapterAsset.code, name: x.chargerAdapterAsset.name }
+      : null,
+    notes: str(x.notes),
   }
 }
 

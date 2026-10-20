@@ -50,7 +50,13 @@ const detailInclude = {
   workIdentity: { select: { id: true, name: true, roomId: true } },
   asset: { select: { id: true, code: true, name: true } },
   items: { include: { asset: { select: { id: true, code: true, name: true } } } },
-  phoneDetail: true,
+  phoneDetail: {
+    include: {
+      bitrixAccount: { select: { id: true, identifier: true, email: true } },
+      chargerCableAsset: { select: { id: true, code: true, name: true } },
+      chargerAdapterAsset: { select: { id: true, code: true, name: true } },
+    },
+  },
   photos: { orderBy: { createdAt: 'asc' }, select: { id: true, type: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true } },
   timelineEntries: { orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, eventType: true, snapshot: true, createdAt: true, createdBy: { select: { id: true, fullName: true } } } },
 };

@@ -11,6 +11,7 @@ import AccountsPage from '@/pages/AccountsPage'
 import EmployeesPage from '@/pages/EmployeesPage'
 import EmployeeDetailPage from '@/pages/EmployeeDetailPage'
 import AssignmentDetailPage from '@/pages/assignments/AssignmentDetailPage'
+import AssignmentReceiptPage from '@/pages/assignments/AssignmentReceiptPage'
 import ReturnPage from '@/pages/assignments/ReturnPage'
 import GenericAssignPage from '@/pages/assignments/GenericAssignPage'
 import { AssignmentsPage, DepartmentsPage, RoomsPage } from '@/pages/PeoplePages'
@@ -53,6 +54,8 @@ export default function App() {
           <Route path="/forbidden" element={<Forbidden />} />
           <Route path="*" element={<NotFound />} />
         </Route>
+        {/* Mounted OUTSIDE AppLayout so nav/sidebar never enter the DOM on the receipt (clean A4 print). */}
+        <Route path="/assignments/:id/receipt" element={<AssignmentReceiptPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
