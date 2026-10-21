@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from './client'
 import {
-  normAccount, normAsset, normAssignment, normAssignmentDetail, normCategories, normDepartment, normEmployee, normEmployeeHistory, normField, normList,
+  normAccount, normAsset, normAssignment, normAssignmentDetail, normAuditLog, normCategories, normDepartment, normEmployee, normEmployeeHistory, normField, normList,
   normPhoto, normReportRows, normReturnForm, normReturnResult, normRoom, normTimeline, normUser,
   normWorkIdentity, unwrap,
 } from './normalize'
 import type {
-  Account, AccountSavePayload, Asset, AssignmentDetail, Category, CategoryField, Department, DepartmentSavePayload, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
-  ReportRow, ReportSlug, ReturnResult, Room, TimelineEntry,
+  Account, AccountSavePayload, Asset, AssignmentDetail, AuditLogEntry, Category, CategoryField, Department, DepartmentSavePayload, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
+  ReportRow, ReportSlug, ReturnResult, Room, TimelineEntry, User, UserSavePayload,
 } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -114,6 +114,32 @@ export function useSaveAsset(id?: string) {
     mutationFn: async (p: AssetPayload): Promise<Asset> => {
       const raw = id ? await api.patch<R>(`/assets/${id}`, p) : await api.post<R>('/assets', p)
       return normAsset(unwrap(raw) as R)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assets'] })
+      if (id) qc.invalidateQueries({ queryKey: ['asset', id] })
+    },
+  })
+}
+
+export interface DeleteAssetResult {
+  id: string
+  /** true when the asset had assignment history and was soft-disposed (status → DISPOSED) instead of hard-deleted. */
+  softDeleted: boolean
+}
+
+/**
+ * Delete an asset. Hard-deletes (204) or soft-disposes via `{data:{softDeleted:true,status:'DISPOSED'}}` (200)
+ * when the asset has history. A 409 is thrown by the client when the asset is part of an active assignment —
+ * the caller surfaces that distinctly.
+ */
+export function useDeleteAsset(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<DeleteAssetResult> => {
+      const raw = await api.del<R>(`/assets/${id}`)
+      const d = unwrap(raw) as R | null
+      return { id, softDeleted: d?.softDeleted === true }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['assets'] })
@@ -495,6 +521,76 @@ export function useSubmitPhoneReturn(assignmentId: string) {
       qc.invalidateQueries({ queryKey: ['assignments'] })
       qc.invalidateQueries({ queryKey: ['assignment-timeline', assignmentId] })
     },
+  })
+}
+
+/* ---------- Users (BE-17 CRUD: POST/PATCH /users, PATCH /users/:id/password) ---------- */
+
+export function useUsers(filters: { q?: string; role?: string; isActive?: boolean; page?: number; pageSize?: number } = {}) {
+  return useQuery({
+    queryKey: ['users', filters],
+    placeholderData: keepPreviousData,
+    queryFn: async () => normList(await api.get('/users', filters as any), normUser),
+  })
+}
+
+/** Create (id absent) or update (id present) a user. Invalidates the list on save. */
+export function useSaveUser(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: UserSavePayload): Promise<User> => {
+      const raw = id ? await api.patch<R>(`/users/${id}`, p) : await api.post<R>('/users', p)
+      return normUser(unwrap(raw) as R)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+/**
+ * Delete (deactivate) a user. The backend ships no DELETE /users/:id, so this soft-deactivates via
+ * PATCH /users/:id `{isActive:false}` (the server revokes all the user's sessions and keeps audit history).
+ * A 409 is thrown by the server when the target is the signed-in account — surfaced distinctly by the caller.
+ */
+export function useDeleteUser(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      await api.patch(`/users/${id}`, { isActive: false })
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+/** Reset a user's password (PATCH /users/:id/password). Revokes the user's sessions server-side. */
+export function useResetUserPassword(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (password: string): Promise<void> => {
+      await api.patch(`/users/${id}/password`, { password })
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+/* ---------- Audit logs (contract §8 extension — GET /audit-logs, ADMIN only) ---------- */
+
+export interface AuditLogFilters {
+  actorId?: string
+  action?: string
+  targetType?: string
+  from?: string
+  to?: string
+  q?: string
+  page?: number
+  pageSize?: number
+}
+
+/** Paginated, filterable audit trail. ADMIN-only server-side (audit:read capability). */
+export function useAuditLogs(filters: AuditLogFilters) {
+  return useQuery({
+    queryKey: ['audit-logs', filters],
+    placeholderData: keepPreviousData,
+    queryFn: async (): Promise<ListResult<AuditLogEntry>> => normList(await api.get('/audit-logs', filters as any), normAuditLog),
   })
 }
 

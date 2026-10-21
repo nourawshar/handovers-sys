@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Camera, Pencil, Search } from 'lucide-react'
-import { useAsset, useAssetTimeline, useCategories, useUploadAssetPhotos } from '@/api/hooks'
+import { ArrowLeft, Camera, Pencil, Search, Trash2 } from 'lucide-react'
+import { useAsset, useAssetTimeline, useCategories, useDeleteAsset, useUploadAssetPhotos } from '@/api/hooks'
+import type { DeleteAssetResult } from '@/api/hooks'
 import AssignmentDrawer from './AssignmentDrawer'
 import type { Asset, TimelineEntry } from '@/api/types'
 import { useAuthStore } from '@/store/auth'
@@ -151,6 +152,8 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
   const { data, isLoading, isError, error, refetch } = useAsset(id)
   const categories = useCategories()
   const [tab, setTab] = useState<'details' | 'timeline'>(timelineOnly ? 'timeline' : 'details')
+  const deleteAsset = useDeleteAsset(id ?? '')
+  const [deleteMsg, setDeleteMsg] = useState<{ kind: 'ok' | 'warn'; text: string } | null>(null)
 
   const drawerId = searchParams.get('assignment')
   const openDrawer = (assignmentId: string) => {
@@ -174,9 +177,33 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
   const customEntries = Object.entries(a.customFields).filter(([, v]) => v !== null && v !== '' && v !== undefined)
   const isAdmin = can(user?.role, 'assets.edit')
 
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete "${a.name}" (${a.code})?\n\nIf it has assignment history it will be soft-disposed (status → Disposed) so history is preserved. This cannot be undone.`)) return
+    setDeleteMsg(null)
+    try {
+      const res: DeleteAssetResult = await deleteAsset.mutateAsync()
+      const msg = res.softDeleted
+        ? { kind: 'warn' as const, text: `${a.code} had history and was soft-deleted (status → Disposed).` }
+        : { kind: 'ok' as const, text: `${a.code} was permanently deleted.` }
+      setDeleteMsg(msg)
+      nav('/assets', { state: { notice: msg }, replace: true })
+    } catch (err) {
+      const status = (err as { status?: number }).status
+      setDeleteMsg(status === 409
+        ? { kind: 'warn', text: `${a.code} is part of an active assignment; return it first before deleting.` }
+        : { kind: 'warn', text: `Delete failed: ${(err as Error).message}` })
+    }
+  }
+
   return (
     <>
       <Link to="/assets" className="mb-3 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ArrowLeft className="h-4 w-4" /> Assets</Link>
+      {deleteMsg && (
+        <div className={`mb-4 flex items-center gap-2 rounded-lg border px-4 py-3 text-xs ${deleteMsg.kind === 'warn' ? 'border-red-200 bg-red-50 text-red-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+          {deleteMsg.text}
+          <button className="ml-auto text-slate-400 hover:text-slate-600" onClick={() => setDeleteMsg(null)} aria-label="Dismiss">✕</button>
+        </div>
+      )}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="font-mono text-xs font-semibold text-brand-700">{a.code}</p>
@@ -185,7 +212,14 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
             {cat && <Badge>{cat}</Badge>}<ConditionBadge value={a.condition} /><StatusBadge value={a.status} />
           </div>
         </div>
-        {isAdmin && <Button variant="secondary" onClick={() => nav(`/assets/${a.id}/edit`)}><Pencil className="h-4 w-4" /> Edit</Button>}
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <Button variant="danger" onClick={handleDelete} loading={deleteAsset.isPending}>
+              <Trash2 className="h-4 w-4" /> Delete
+            </Button>
+            <Button variant="secondary" onClick={() => nav(`/assets/${a.id}/edit`)}><Pencil className="h-4 w-4" /> Edit</Button>
+          </div>
+        )}
       </div>
 
       <Tabs

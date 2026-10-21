@@ -96,10 +96,20 @@ function shapeCustomFields(asset, fields) {
   return { ...rest, customFields: svc.shapeCustomFields(fields, customValues) };
 }
 
-/** Team leaders see assets located in their room or held by an employee of their room. */
+/** Team leaders see assets located in their room or held by an employee of their room.
+ *  CALL_CENTER_MANAGER sees assets in any CALLCENTER room or held by an employee of one. */
 function scopeWhere(user) {
   const s = roomScope(user);
-  return s ? { OR: [{ roomId: s.roomId }, { currentHolder: { roomId: s.roomId } }] } : {};
+  if (!s) return {};
+  if (s.allCallCenter) {
+    return {
+      OR: [
+        { room: { teamType: 'CALLCENTER' } },
+        { currentHolder: { room: { teamType: 'CALLCENTER' } } },
+      ],
+    };
+  }
+  return { OR: [{ roomId: s.roomId }, { currentHolder: { roomId: s.roomId } }] };
 }
 
 async function loadScoped(req, id, include) {

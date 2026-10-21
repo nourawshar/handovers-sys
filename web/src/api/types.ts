@@ -1,7 +1,7 @@
 // Domain types. Field names follow README §5 (data model) until docs/API_CONTRACT.md exists.
 // Any divergence is isolated in src/api/normalize.ts so the contract can be reconciled in one place.
 
-export type Role = 'ADMIN' | 'MANAGER' | 'TEAM_LEADER'
+export type Role = 'ADMIN' | 'MANAGER' | 'TEAM_LEADER' | 'CALL_CENTER_MANAGER'
 
 export const CONDITIONS = ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED'] as const
 export type Condition = (typeof CONDITIONS)[number]
@@ -25,6 +25,32 @@ export interface User {
   room?: RoomRef | null
   isActive?: boolean
   lastLoginAt?: string | null
+}
+
+/**
+ * Write payload for POST /users and PATCH /users/:id (BE-17). `username` + `password` are create-only
+ * (the server's PATCH body is strict and accepts only fullName/role/roomId/scope/isActive); `roomId` is
+ * required when role is TEAM_LEADER; password min length 10.
+ */
+export interface UserSavePayload {
+  username?: string
+  password?: string
+  fullName: string
+  role: Role
+  roomId?: string | null
+  isActive?: boolean
+}
+
+/** One row of the audit trail (GET /audit-logs, contract §8 extension). */
+export interface AuditLogEntry {
+  id: string
+  actor: { id: string; fullName: string; username: string } | null
+  action: string
+  targetType: string | null
+  targetId: string | null
+  meta: Record<string, unknown> | null
+  ip: string | null
+  createdAt: string
 }
 
 export interface Category {
@@ -328,6 +354,8 @@ export interface GenericAssignmentPayload {
   workIdentityId?: string | null
   workIdentity?: WorkIdentityInput
   assetId: string
+  /** Optional bundled accessories (monitor/mouse/keyboard/headphone…) — created as BUNDLED items (BE-18). */
+  accessoryAssetIds?: string[]
   conditionAtHandover: string
   expectedReturnAt?: string | null
   notes?: string | null

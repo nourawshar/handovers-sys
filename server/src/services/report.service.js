@@ -1,8 +1,8 @@
 'use strict';
 /**
  * Phase 4 report queries + shared row-shaping + CSV/XLSX export serializer (BE-4).
- * All five reports are read-only and room-scoped for TEAM_LEADER (contract §10, §11).
- * Row shapes match docs/API_CONTRACT.md §10.1–10.5 field names verbatim.
+ * All five reports are read-only and room-scoped for TEAM_LEADER / CALL_CENTER_MANAGER
+ * (contract §10, §11). Row shapes match docs/API_CONTRACT.md §10.1–10.5 field names verbatim.
  */
 const ExcelJS = require('exceljs');
 const prisma = require('../db');
@@ -70,8 +70,20 @@ const assignmentRoomFilter = (roomId) => ({
   OR: [{ workIdentity: { roomId } }, { workIdentity: { is: null }, employee: { roomId } }],
 });
 
-/** TEAM_LEADER scope → where fragment filtering an Assignment by its room. */
-const assignmentRoomWhere = (scope) => (scope ? assignmentRoomFilter(scope.roomId) : {});
+/** TEAM_LEADER scope → where fragment filtering an Assignment by its room.
+ *  CALL_CENTER_MANAGER scope → any CALLCENTER room (workIdentity room, or employee room when no WIP). */
+const assignmentRoomWhere = (scope) => {
+  if (!scope) return {};
+  if (scope.allCallCenter) {
+    return {
+      OR: [
+        { workIdentity: { room: { teamType: 'CALLCENTER' } } },
+        { workIdentity: { is: null }, employee: { room: { teamType: 'CALLCENTER' } } },
+      ],
+    };
+  }
+  return assignmentRoomFilter(scope.roomId);
+};
 
 const sliceForPage = (rows, { page, pageSize }) => {
   const skip = (page - 1) * pageSize;
@@ -83,8 +95,8 @@ async function whoHasWhat(filters, scope) {
   const f = filters;
   const and = [{ status: 'ACTIVE' }];
   if (scope) {
-    // TEAM_LEADER: forced to own room via the assignment-room convention (fail closed).
-    and.push(assignmentRoomFilter(scope.roomId));
+    // TEAM_LEADER: forced to own room; CALL_CENTER_MANAGER: all CALLCENTER rooms (fail closed).
+    and.push(assignmentRoomWhere(scope));
   } else if (f.scope === 'room' && f.roomId) {
     and.push(assignmentRoomFilter(f.roomId));
   } else if (f.scope === 'team' && f.departmentTeamId) {
@@ -131,7 +143,7 @@ async function whoHasWhat(filters, scope) {
 // ───────────────────────────── condition (§10.2) ─────────────────────────────
 async function condition(filters, scope) {
   const f = filters;
-  const where = { ...(scope ? { roomId: scope.roomId } : {}) };
+  const where = scope ? (scope.allCallCenter ? { room: { teamType: 'CALLCENTER' } } : { roomId: scope.roomId }) : {};
   if (f.categoryId) where.categoryId = f.categoryId;
   // `status` filters by asset condition; when absent, exclude DISPOSED (plan R-premise: "all non-DISPOSED").
   where.condition = f.status || { not: 'DISPOSED' };
@@ -238,8 +250,8 @@ async function outstandingAssignments(filters, scope) {
 // ───────────────────────────── room-composition (§10.5) ─────────────────────────────
 async function roomComposition(filters, scope) {
   const f = filters;
-  // TEAM_LEADER forced to own room; otherwise the requested roomId (or all rooms).
-  const roomFilter = scope ? { id: scope.roomId } : f.roomId ? { id: f.roomId } : {};
+  // TEAM_LEADER forced to own room; CALL_CENTER_MANAGER all CALLCENTER rooms; otherwise the requested roomId (or all rooms).
+  const roomFilter = scope ? (scope.allCallCenter ? { teamType: 'CALLCENTER' } : { id: scope.roomId }) : f.roomId ? { id: f.roomId } : {};
 
   const rooms = await prisma.room.findMany({
     where: roomFilter,
@@ -301,7 +313,7 @@ const BUILDERS = {
 // ───────────────────────────── export serializers ─────────────────────────────
 const csvEscape = (v) => {
   const s = v == null ? '' : String(v);
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return /[\",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 function toCsv(rows, columns) {

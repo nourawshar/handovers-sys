@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 
 const BASE = process.env.BASE_URL || 'http://localhost:4000';
 const API = `${BASE}/api/v1`;
-const PW = { admin: 'Admin#12345', manager: 'Manager#12345', 'tl.tr1': 'Leader#12345' };
+const PW = { admin: 'Admin#12345', manager: 'Manager#12345', 'tl.tr1': 'Leader#12345', 'mr.mahmoud': 'Mahmoud#12345' };
 
 class Client {
   constructor() { this.cookies = {}; }
@@ -473,5 +473,155 @@ test('phase5: generic assignment + work-identity upsert idempotency + account-by
   assert.equal(ph2.status, 201);
   assert.equal(ph2.body.data.workIdentity.id, ccWipId, 'call-center WIP must be reused via name_roomId upsert');
 
-  await prisma.$disconnect();
-});
+    await prisma.$disconnect();
+  });
+
+  test('BE-17: CALL_CENTER_MANAGER reads all CALLCENTER data, cannot write/see accounts/decrypt', async () => {
+    const ccm = await as('mr.mahmoud');
+    const admin = await as('admin');
+
+    // Reads across ALL call-center rooms (assets, employees, rooms, assignments, reports).
+    assert.equal((await ccm.req('GET', '/assets?pageSize=100')).status, 200);
+    assert.equal((await ccm.req('GET', '/employees?pageSize=100')).status, 200);
+    assert.equal((await ccm.req('GET', '/rooms')).status, 200);
+    assert.equal((await ccm.req('GET', '/assignments?pageSize=100')).status, 200);
+    assert.equal((await ccm.req('GET', '/reports/who-has-what')).status, 200);
+
+    // Rooms list is restricted to CALLCENTER rooms only.
+    const rooms = (await ccm.req('GET', '/rooms')).body.data;
+    assert.ok(rooms.length > 0);
+    assert.ok(rooms.every((r) => r.teamType === 'CALLCENTER'), 'CALL_CENTER_MANAGER sees only CALLCENTER rooms');
+
+    // Assets visible are all in CALLCENTER rooms (or held by a CALLCENTER employee).
+    const assets = (await ccm.req('GET', '/assets?pageSize=100')).body.data;
+    assert.ok(assets.length > 0);
+    const adminAssets = (await admin.req('GET', '/assets?pageSize=100')).body.data;
+    assert.ok(adminAssets.length >= assets.length, 'CALL_CENTER_MANAGER sees a subset of all assets');
+
+    // Cannot write (403), cannot see accounts (403), cannot decrypt (403), cannot manage users (403).
+    assert.equal((await ccm.req('POST', '/assets', { body: {} })).status, 403);
+    assert.equal((await ccm.req('POST', '/rooms', { body: { code: 'X' } })).status, 403);
+    assert.equal((await ccm.req('GET', '/accounts')).status, 403);
+    assert.equal((await ccm.req('GET', '/users')).status, 403);
+    const acc = (await admin.req('GET', '/accounts')).body.data[0];
+    assert.equal((await ccm.req('GET', `/accounts/${acc.id}/decrypt`)).status, 403);
+
+    // Cannot export reports (reports:export = ADMIN/MANAGER only).
+    assert.equal((await ccm.req('GET', '/reports/who-has-what/export')).status, 403);
+  });
+
+  test('BE-17: GET /audit-logs is ADMIN-only, paginated and filterable', async () => {
+    const admin = await as('admin');
+    const manager = await as('manager');
+    const ccm = await as('mr.mahmoud');
+
+    // Non-ADMIN roles are denied.
+    assert.equal((await manager.req('GET', '/audit-logs')).status, 403);
+    assert.equal((await ccm.req('GET', '/audit-logs')).status, 403);
+
+    // ADMIN can read; envelope has data + meta.
+    const list = await admin.req('GET', '/audit-logs?pageSize=5');
+    assert.equal(list.status, 200);
+    assert.ok(Array.isArray(list.body.data));
+    assert.ok(list.body.meta.total > 0);
+    assert.ok(list.body.meta.totalPages >= 1);
+    assert.ok(list.body.data.length <= 5);
+
+    // Each row carries actor{id,fullName,username}, action, targetType, targetId, meta, ip, createdAt.
+    const row = list.body.data[0];
+    assert.ok(row.id && row.action && row.createdAt);
+    assert.ok(row.actor === null || (row.actor.id && row.actor.fullName && row.actor.username));
+    assert.ok('targetType' in row && 'targetId' in row && 'meta' in row && 'ip' in row);
+
+    // Ordered createdAt desc.
+    const times = list.body.data.map((r) => new Date(r.createdAt).getTime());
+    assert.ok(times.every((t, i) => i === 0 || t <= times[i - 1]), 'logs ordered newest-first');
+
+    // Filter by action (substring, insensitive).
+    const filtered = await admin.req('GET', `/audit-logs?action=${encodeURIComponent('asset.create')}`);
+    assert.equal(filtered.status, 200);
+    assert.ok(filtered.body.data.every((r) => r.action.toLowerCase().includes('asset.create')));
+
+    // Filter by q (matches action or targetType).
+    const q = await admin.req('GET', '/audit-logs?q=asset');
+    assert.equal(q.status, 200);
+    assert.ok(q.body.data.every((r) => r.action.toLowerCase().includes('asset') || (r.targetType || '').toLowerCase().includes('asset')));
+
+    // Filter by actorId.
+      const me = (await admin.req('GET', '/auth/me')).body.user;
+      const byActor = await admin.req('GET', `/audit-logs?actorId=${me.id}`);
+      assert.equal(byActor.status, 200);
+      assert.ok(byActor.body.data.every((r) => r.actor?.id === me.id));
+    });
+
+  test('BE-18: generic assignment with accessories — COMPUTERS type + BUNDLED items + all assets flip', async () => {
+    const prisma = require('../src/db');
+    const admin = await as('admin');
+
+    // Fixtures from seed
+    const computersCat = await prisma.assetCategory.findFirst({ where: { name: 'Computers' }, select: { id: true } });
+    const monitorsCat = await prisma.assetCategory.findFirst({ where: { name: 'Monitors' }, select: { id: true } });
+    const cc = await prisma.departmentTeam.findFirst({ where: { name: 'Call Center' }, select: { id: true } });
+    const tr1 = await prisma.room.findFirst({ where: { code: 'TR1' }, select: { id: true } });
+    const ayse = await prisma.employee.findFirst({ where: { fullName: 'Ayse Celik' }, select: { id: true } });
+
+    // Create a PC + 2 accessories (monitor + mouse) as AVAILABLE assets
+    const mkAsset = async (catId, name) => {
+      const r = await admin.req('POST', '/assets', { body: { categoryId: catId, name, condition: 'GOOD', status: 'AVAILABLE', roomId: tr1.id } });
+      assert.equal(r.status, 201);
+      assert.equal(r.body.data.status, 'AVAILABLE');
+      return r.body.data;
+    };
+    const pc = await mkAsset(computersCat.id, `BE18 PC ${Date.now()}`);
+    const mon = await mkAsset(monitorsCat.id, `BE18 Monitor ${Date.now()}`);
+    const mouse = await mkAsset(monitorsCat.id, `BE18 Mouse ${Date.now()}`);
+
+    // Route accepts COMPUTERS + accessoryAssetIds; creates one ACTIVE assignment
+    const wid = { name: `BE18 Seat ${Date.now()}`, departmentTeamId: cc.id, roomId: tr1.id };
+    const g = await admin.req('POST', '/assignments/generic', {
+      body: { type: 'COMPUTERS', employeeId: ayse.id, workIdentity: wid, assetId: pc.id, accessoryAssetIds: [mon.id, mouse.id], conditionAtHandover: 'GOOD' },
+    });
+    assert.equal(g.status, 201);
+    assert.equal(g.body.data.status, 'ACTIVE');
+    assert.equal(g.body.data.type, 'COMPUTERS');
+
+    // Items: PRIMARY (PC) + 2 BUNDLED (accessories)
+    const items = g.body.data.items;
+    assert.equal(items.length, 3);
+    const primary = items.find((i) => i.assetId === pc.id);
+    assert.equal(primary.role, 'PRIMARY');
+    const bundled = items.filter((i) => i.assetId === mon.id || i.assetId === mouse.id);
+    assert.equal(bundled.length, 2);
+    assert.ok(bundled.every((i) => i.role === 'BUNDLED'));
+
+    // All assets flipped to ASSIGNED + holder + room
+    for (const id of [pc.id, mon.id, mouse.id]) {
+      const a = await prisma.asset.findUnique({ where: { id }, select: { status: true, currentHolderEmployeeId: true, roomId: true } });
+      assert.equal(a.status, 'ASSIGNED');
+      assert.equal(a.currentHolderEmployeeId, ayse.id);
+      assert.equal(a.roomId, tr1.id);
+    }
+
+    // ASSIGNED timeline written with all items in snapshot
+    const tl = (await admin.req('GET', `/assignments/${g.body.data.id}/timeline?pageSize=20`)).body.data;
+    const assigned = tl.find((e) => e.eventType === 'ASSIGNED');
+    assert.ok(assigned, 'ASSIGNED timeline entry written');
+    assert.equal(assigned.snapshot.items.length, 3);
+
+    // Route rejects PHONE (400) and already-active asset (409)
+    assert.equal(
+      (await admin.req('POST', '/assignments/generic', { body: { type: 'PHONE', employeeId: ayse.id, assetId: pc.id, conditionAtHandover: 'GOOD' } })).status,
+      400,
+    );
+    assert.equal(
+      (await admin.req('POST', '/assignments/generic', { body: { type: 'COMPUTERS', employeeId: ayse.id, workIdentity: wid, assetId: pc.id, conditionAtHandover: 'GOOD' } })).status,
+      409,
+    );
+    // An accessory already in an ACTIVE assignment is also rejected (409)
+    assert.equal(
+      (await admin.req('POST', '/assignments/generic', { body: { type: 'COMPUTERS', employeeId: ayse.id, workIdentity: wid, assetId: pc.id, accessoryAssetIds: [mon.id], conditionAtHandover: 'GOOD' } })).status,
+      409,
+    );
+
+    await prisma.$disconnect();
+  });

@@ -12,7 +12,7 @@ const fs = require('fs');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 const BASE = 'http://localhost:4000/api/v1';
-const WB = '/opt/data/attachments/full deailed report for all the callcenter romm PCS and PHONES LASTTTTTTT UPDATED(AutoRecovered)(AutoRecovered).xlsx';
+const WB = process.env.WORKBOOK_PATH || '/opt/data/attachments/full deailed report for all the callcenter romm PCS and PHONES LASTTTTTTT UPDATED(AutoRecovered)(AutoRecovered).xlsx';
 
 // Placeholder passwords: the source workbook provides NO credentials. The system requires a
 // password field; we store an explicit placeholder and flag it in every account note.
@@ -224,7 +224,7 @@ async function main() {
     throw new Error(`account create failed ${identifier}: ${JSON.stringify(r.body).slice(0, 200)}`);
   }
 
-  const summary = { employees: 0, phones: 0, pcs: 0, accessories: 0, gmailAccounts: 0, whatsappAccounts: 0, phoneAssignments: 0, genericAssignments: 0 };
+  const summary = { employees: 0, phones: 0, pcs: 0, accessories: 0, gmailAccounts: 0, whatsappAccounts: 0, phoneAssignments: 0, genericAssignments: 0, pcsSkippedAlreadyAssigned: 0 };
   const issues = [];
   const report = [];
 
@@ -277,6 +277,7 @@ async function main() {
 
         // 5. PC + accessories assets
         let pcAssetId = null;
+        const accessoryAssetIds = [];
         if (r.hasPc) {
           const pcNotes = [`OS: ${r.pcOs || '?'}`, `HDD: ${r.pcHdd || '?'}`, `RAM: ${r.pcRam || '?'}`].filter((x) => x).join(' | ');
           const pcResp = await api('POST', '/assets', { categoryId: computers.id, name: r.pc, condition: 'GOOD', status: 'AVAILABLE', roomId: room.id, notes: pcNotes });
@@ -286,7 +287,7 @@ async function main() {
             const cat = { monitor: catByName['Monitors'], mouse: catByName['Mouse'], keyboard: catByName['Keyboards'], headphone: catByName['Headphones'] }[a.key];
             const cap = { monitor: 'Monitor', mouse: 'Mouse', keyboard: 'Keyboard', headphone: 'Headphone' }[a.key];
             const ar = await api('POST', '/assets', { categoryId: cat.id, name: cap, condition: a.cond || 'GOOD', status: 'AVAILABLE', roomId: room.id, notes: a.raw ? `Condition: ${a.raw}` : null });
-            if (ar.status < 300) { summary.accessories++; log.accounts.push('acc:' + a.key); }
+            if (ar.status < 300) { accessoryAssetIds.push(ar.body.data.id); summary.accessories++; log.accounts.push('acc:' + a.key); }
           }
         }
 
@@ -312,9 +313,19 @@ async function main() {
           if (OK(ar, `phone assignment ${r.empName}`)) { summary.phoneAssignments++; log.assignment = 'PHONE'; }
           else { issues.push(`${sh} R${r.row} ${r.empName}: phone assignment failed: ${JSON.stringify(ar.body?.error)?.slice(0, 200)}`); log.assignment = 'PHONE-FAIL'; }
         } else if (pcAssetId) {
-          const ar = await api('POST', '/assignments/generic', { type: 'LAPTOP', employeeId: empId, workIdentity: wid, assetId: pcAssetId, conditionAtHandover: 'GOOD', notes: r.note ? `Note: ${r.note}` : undefined });
-          if (OK(ar, `generic assignment ${r.empName}`)) { summary.genericAssignments++; log.assignment = 'GENERIC'; }
-          else issues.push(`${sh} R${r.row} ${r.empName}: generic assignment failed: ${JSON.stringify(ar.body?.error)?.slice(0, 200)}`);
+          // Idempotency guard: if the PC already has an ACTIVE assignment, skip it (don't error).
+          // Check the specific asset's status (the assignments list route has no assetId filter).
+          const pcDetail = await api('GET', `/assets/${pcAssetId}`);
+          const alreadyAssigned = pcDetail.status < 300 && pcDetail.body?.data?.status === 'ASSIGNED';
+          if (alreadyAssigned) {
+            summary.pcsSkippedAlreadyAssigned++;
+            log.assignment = 'PC-ALREADY-ASSIGNED';
+            console.log(`    ~ ${sh} R${r.row} ${r.empName}: PC already assigned — skipped`);
+          } else {
+            const ar = await api('POST', '/assignments/generic', { type: 'COMPUTERS', employeeId: empId, workIdentity: wid, assetId: pcAssetId, accessoryAssetIds, conditionAtHandover: 'GOOD', notes: r.note ? `Note: ${r.note}` : undefined });
+            if (OK(ar, `generic assignment ${r.empName}`)) { summary.genericAssignments++; log.assignment = 'GENERIC'; }
+            else issues.push(`${sh} R${r.row} ${r.empName}: generic assignment failed: ${JSON.stringify(ar.body?.error)?.slice(0, 200)}`);
+          }
         } else {
           issues.push(`${sh} R${r.row} ${r.empName}: no phone asset (missing/dup IMEI) and no PC — no assignment created`);
         }

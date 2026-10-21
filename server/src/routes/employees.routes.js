@@ -10,7 +10,7 @@ const { audit } = require('../services/audit.service');
 
 /**
  * Employees full CRUD (Phase 5 / BE-6).
- * Reads: people:read (ADMIN/MANAGER/TEAM_LEADER — TEAM_LEADER room-scoped).
+ * Reads: people:read (ADMIN/MANAGER/TEAM_LEADER/CALL_CENTER_MANAGER — TL/CCM room-scoped).
  * Writes: people:write (Admin only).
  */
 const router = express.Router();
@@ -66,14 +66,20 @@ function isDup(e) {
   return e?.code === 'P2002';
 }
 
+/** TEAM_LEADER → own room; CALL_CENTER_MANAGER → all CALLCENTER rooms; else unrestricted. */
+function scopeWhere(user, f) {
+  const s = roomScope(user);
+  if (s) return s.allCallCenter ? { room: { teamType: 'CALLCENTER' } } : { roomId: s.roomId };
+  return f.roomId ? { roomId: f.roomId } : {};
+}
+
 router.get(
   '/',
   read,
   validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), roomId: z.uuid().optional(), departmentTeamId: z.uuid().optional() }) }),
   asyncHandler(async (req, res) => {
     const f = req.validQuery;
-    const s = roomScope(req.user);
-    const where = { ...(s ? { roomId: s.roomId } : f.roomId ? { roomId: f.roomId } : {}), ...(f.departmentTeamId && { departmentTeamId: f.departmentTeamId }), ...(f.q && { fullName: { contains: f.q, mode: 'insensitive' } }) };
+    const where = { ...scopeWhere(req.user, f), ...(f.departmentTeamId && { departmentTeamId: f.departmentTeamId }), ...(f.q && { fullName: { contains: f.q, mode: 'insensitive' } }) };
     const [total, data] = await Promise.all([
       prisma.employee.count({ where }),
       prisma.employee.findMany({ where, orderBy: { fullName: 'asc' }, include: detailInclude, ...paginate(f) }),

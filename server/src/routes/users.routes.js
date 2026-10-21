@@ -14,9 +14,12 @@ router.use(requireCapability('users:manage'));
 
 const idParams = z.object({ id: z.uuid() });
 const password = z.string().min(10, 'Password must be at least 10 characters').max(200);
-const role = z.enum(['ADMIN', 'MANAGER', 'TEAM_LEADER']);
+// CHANGE 7 / BE-17: CALL_CENTER_MANAGER added (CEO + assistant, read-only across all call-center rooms).
+const role = z.enum(['ADMIN', 'MANAGER', 'TEAM_LEADER', 'CALL_CENTER_MANAGER']);
+// Room-scope discriminator: 'OWN_ROOM' = TEAM_LEADER scoped to User.roomId; null = unrestricted.
+const scope = z.enum(['OWN_ROOM']).nullish();
 
-const select = { id: true, username: true, fullName: true, role: true, roomId: true, isActive: true, lastLoginAt: true, createdAt: true };
+const select = { id: true, username: true, fullName: true, role: true, roomId: true, scope: true, isActive: true, lastLoginAt: true, createdAt: true };
 
 const createBody = z
   .object({
@@ -25,15 +28,18 @@ const createBody = z
     fullName: z.string().trim().min(1).max(150),
     role,
     roomId: z.uuid().nullish(),
+    scope,
     isActive: z.boolean().default(true),
   })
-  .refine((v) => v.role !== 'TEAM_LEADER' || v.roomId, { path: ['roomId'], message: 'roomId is required for TEAM_LEADER' });
+  .refine((v) => v.role !== 'TEAM_LEADER' || v.roomId, { path: ['roomId'], message: 'roomId is required for TEAM_LEADER' })
+  .refine((v) => v.role !== 'CALL_CENTER_MANAGER' || v.scope !== 'OWN_ROOM', { path: ['scope'], message: 'CALL_CENTER_MANAGER scope must be null (breadth comes from the role)' });
 
 const patchBody = z
   .object({
     fullName: z.string().trim().min(1).max(150),
     role,
     roomId: z.uuid().nullable(),
+    scope: z.enum(['OWN_ROOM']).nullable(),
     isActive: z.boolean(),
   })
   .partial()
@@ -63,7 +69,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const { password: pw, ...rest } = req.body;
     const user = await prisma.user.create({
-      data: { ...rest, roomId: rest.role === 'TEAM_LEADER' ? rest.roomId : null, passwordHash: await authService.hashPassword(pw) },
+      data: { ...rest, roomId: rest.role === 'TEAM_LEADER' ? rest.roomId : null, scope: rest.role === 'TEAM_LEADER' ? 'OWN_ROOM' : rest.scope ?? null, passwordHash: await authService.hashPassword(pw) },
       select,
     });
     await audit(req, 'user.create', 'User', user.id, { role: user.role });
@@ -79,9 +85,15 @@ router.patch(
     if (!existing) throw notFound('User');
     const next = { ...existing, ...req.body };
     if (next.role === 'TEAM_LEADER' && !next.roomId) throw badRequest('roomId is required for TEAM_LEADER');
+    if (next.role === 'CALL_CENTER_MANAGER' && next.scope === 'OWN_ROOM') throw badRequest('CALL_CENTER_MANAGER scope must be null (breadth comes from the role)');
     if (existing.id === req.user.id && (req.body.isActive === false || (req.body.role && req.body.role !== 'ADMIN')))
       throw conflict('You cannot deactivate or demote your own account');
-    const data = { ...req.body, ...(next.role !== 'TEAM_LEADER' && { roomId: null }) };
+    const data = {
+      ...req.body,
+      ...(next.role !== 'TEAM_LEADER' && { roomId: null }),
+      ...(next.role === 'TEAM_LEADER' && { scope: 'OWN_ROOM' }),
+      ...(next.role !== 'TEAM_LEADER' && next.role !== 'CALL_CENTER_MANAGER' && { scope: null }),
+    };
     const user = await prisma.user.update({ where: { id: existing.id }, data, select });
     if (req.body.isActive === false || req.body.role) await authService.revokeAllForUser(user.id);
     await audit(req, 'user.update', 'User', user.id, { changes: Object.keys(req.body) });

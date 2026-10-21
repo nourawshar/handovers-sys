@@ -59,8 +59,9 @@ router.get(
   read,
   asyncHandler(async (req, res) => {
     const s = roomScope(req.user);
+    const where = s ? (s.allCallCenter ? { teamType: 'CALLCENTER' } : { id: s.roomId }) : {};
     const data = await prisma.room.findMany({
-      where: s ? { id: s.roomId } : {},
+      where,
       orderBy: { code: 'asc' },
       include: roomInclude,
     });
@@ -75,9 +76,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const room = await prisma.room.findUnique({ where: { id: req.params.id }, include: roomInclude });
     if (!room) throw notFound('Room');
-    // TEAM_LEADER may only see their own room (fail closed, like asset detail).
+    // TEAM_LEADER may only see their own room; CALL_CENTER_MANAGER only CALLCENTER rooms (fail closed).
     const s = roomScope(req.user);
-    if (s && s.roomId !== room.id) throw notFound('Room');
+    if (s && (s.allCallCenter ? room.teamType !== 'CALLCENTER' : s.roomId !== room.id)) throw notFound('Room');
     res.json({ data: room });
   }),
 );

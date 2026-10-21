@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   BarChart3, Boxes, Building2, DoorOpen, FolderTree, KeyRound, LayoutDashboard, LogOut, Menu,
-  ClipboardList, Users, UserCog, X, type LucideIcon,
+  ClipboardList, ScrollText, Users, UserCog, X, type LucideIcon,
 } from 'lucide-react'
 import { useAuthStore, useUiStore } from '@/store/auth'
 import { can, ROLE_LABEL, type RouteKey } from '@/lib/permissions'
@@ -45,6 +45,7 @@ const NAV: NavGroup[] = [
     items: [
       { to: '/settings/categories', label: 'Categories', icon: FolderTree, access: 'settings.categories' },
       { to: '/settings/users', label: 'Users', icon: UserCog, access: 'settings.users' },
+      { to: '/settings/logs', label: 'Logs', icon: ScrollText, access: 'settings.logs' },
     ],
   },
 ]

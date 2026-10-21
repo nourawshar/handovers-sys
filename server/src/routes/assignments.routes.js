@@ -15,8 +15,8 @@ const read = requireCapability('assignments:read');
 const write = requireCapability('assignments:write'); // Admin only
 
 const idParams = z.object({ id: z.uuid() });
-const assignmentType = z.enum(['PHONE', 'LAPTOP', 'PRINTER', 'SIM', 'GENERAL']);
-const genericType = z.enum(['LAPTOP', 'PRINTER', 'SIM', 'GENERAL']); // PHONE goes through /phone
+const assignmentType = z.enum(['PHONE', 'LAPTOP', 'PRINTER', 'SIM', 'GENERAL', 'COMPUTERS', 'MONITORS', 'MOUSE', 'KEYBOARDS', 'HEADPHONES']);
+const genericType = z.enum(['LAPTOP', 'PRINTER', 'SIM', 'GENERAL', 'COMPUTERS', 'MONITORS', 'MOUSE', 'KEYBOARDS', 'HEADPHONES']); // PHONE goes through /phone
 const assignmentStatus = z.enum(['DRAFT', 'ACTIVE', 'RETURNED', 'CLOSED']);
 const condition = z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED']);
 const waVariant = z.enum(['BUSINESS', 'NORMAL']);
@@ -29,18 +29,36 @@ const workIdentityInput = z.object({
   roomId: z.uuid().nullish(),
 });
 
-/** TEAM_LEADER must only reach assignments whose room they manage (fail closed when unscoped). */
+/** TEAM_LEADER must only reach assignments whose room they manage (fail closed when unscoped).
+ *  CALL_CENTER_MANAGER reaches assignments in any CALLCENTER room (workIdentity room, or the
+ *  employee's room when there is no work identity — matching the report convention). */
 function scoped(scope) {
-  return scope ? { workIdentity: { roomId: scope.roomId } } : {};
+  if (!scope) return {};
+  if (scope.allCallCenter) {
+    return {
+      OR: [
+        { workIdentity: { room: { teamType: 'CALLCENTER' } } },
+        { workIdentity: { is: null }, employee: { room: { teamType: 'CALLCENTER' } } },
+      ],
+    };
+  }
+  return { workIdentity: { roomId: scope.roomId } };
 }
 
-/** Full hydrated assignment for detail + TEAM_LEADER room guard. */
+/** Full hydrated assignment for detail + TEAM_LEADER / CALL_CENTER_MANAGER room guard. */
 async function loadScoped(id, req, include) {
   const assignment = await prisma.assignment.findUnique({ where: { id }, include });
   if (!assignment) throw notFound('Assignment');
   const scope = roomScope(req.user);
-  if (scope && (assignment.workIdentity?.roomId ?? assignment.employee?.roomId) !== scope.roomId) {
-    throw notFound('Assignment');
+  if (scope) {
+    const roomId = assignment.workIdentity?.roomId ?? assignment.employee?.roomId;
+    if (scope.allCallCenter) {
+      // CALL_CENTER_MANAGER: the assignment's room must be a CALLCENTER room.
+      const room = await prisma.room.findUnique({ where: { id: roomId ?? '00000000-0000-0000-0000-000000000000' }, select: { teamType: true } });
+      if (!room || room.teamType !== 'CALLCENTER') throw notFound('Assignment');
+    } else if (roomId !== scope.roomId) {
+      throw notFound('Assignment');
+    }
   }
   return assignment;
 }
@@ -226,6 +244,7 @@ const genericBody = z
     workIdentityId: z.uuid().nullish(),
     workIdentity: workIdentityInput.nullish(),
     assetId: z.uuid(),
+    accessoryAssetIds: z.array(z.uuid()).max(20).nullish(),
     conditionAtHandover: condition,
     expectedReturnAt: dateish.nullish(),
     notes: z.string().trim().max(5000).nullish(),

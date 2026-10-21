@@ -413,7 +413,7 @@ async function createPhoneAssignment(body, userId) {
 async function createGenericAssignment(body, userId) {
   const {
     type, employeeId, workIdentityId, workIdentity, assetId,
-    conditionAtHandover, expectedReturnAt, notes,
+    accessoryAssetIds = [], conditionAtHandover, expectedReturnAt, notes,
   } = body;
 
   return prisma.$transaction(async (tx) => {
@@ -422,8 +422,9 @@ async function createGenericAssignment(body, userId) {
     if (!asset) throw badRequest('assetId does not exist');
     if (asset.category.name === 'Phones') throw badRequest('phone assets must be assigned via /assignments/phone');
 
-    // Dual-active guard (asset already part of an ACTIVE assignment).
-    await assertAssetsFree([assetId], tx);
+    // All involved assets (PRIMARY + accessories) must be free of an ACTIVE assignment.
+    const allAssetIds = [assetId, ...accessoryAssetIds];
+    await assertAssetsFree(allAssetIds, tx);
 
     // workIdentityId (legacy) takes precedence; otherwise upsert the seat on-the-fly.
     const wid = workIdentityId ?? (workIdentity && (await resolveWorkIdentity(workIdentity, tx)).id);
@@ -447,13 +448,17 @@ async function createGenericAssignment(body, userId) {
       },
     });
 
-    const items = [{ assignmentId: assignment.id, assetId, role: 'PRIMARY', conditionAtHandover, isActive: true }];
+    // PRIMARY (the PC) + BUNDLED (accessories) items.
+    const items = [
+      { assignmentId: assignment.id, assetId, role: 'PRIMARY', conditionAtHandover, isActive: true },
+      ...accessoryAssetIds.map((id) => ({ assignmentId: assignment.id, assetId: id, role: 'BUNDLED', conditionAtHandover: 'GOOD', isActive: true })),
+    ];
     await tx.assignmentItem.createMany({ data: items });
 
-    // Flip the asset to ASSIGNED + holder + room (from the work identity's room).
+    // Flip ALL involved assets to ASSIGNED + holder + room (from the work identity's room).
     const widRoom = wid ? await tx.workIdentity.findUnique({ where: { id: wid }, select: { roomId: true } }) : null;
     await tx.asset.updateMany({
-      where: { id: assetId },
+      where: { id: { in: allAssetIds } },
       data: {
         status: 'ASSIGNED',
         currentHolderEmployeeId: employeeId,

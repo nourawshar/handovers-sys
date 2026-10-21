@@ -17,6 +17,7 @@ import GenericAssignPage from '@/pages/assignments/GenericAssignPage'
 import { AssignmentsPage, DepartmentsPage, RoomsPage } from '@/pages/PeoplePages'
 import CategoriesSettingsPage from '@/pages/settings/CategoriesSettingsPage'
 import UsersSettingsPage from '@/pages/settings/UsersSettingsPage'
+import LogsPage from '@/pages/settings/LogsPage'
 import ReportsPage from '@/pages/reports/ReportsPage'
 import { Forbidden, NotFound } from '@/pages/Placeholders'
 
@@ -50,6 +51,7 @@ export default function App() {
                     <Route path="/reports" element={<RequireRole access="reports"><ReportsPage /></RequireRole>} />
           <Route path="/settings/categories" element={<RequireRole access="settings.categories"><CategoriesSettingsPage /></RequireRole>} />
           <Route path="/settings/users" element={<RequireRole access="settings.users"><UsersSettingsPage /></RequireRole>} />
+          <Route path="/settings/logs" element={<RequireRole access="settings.logs"><LogsPage /></RequireRole>} />
 
           <Route path="/forbidden" element={<Forbidden />} />
           <Route path="*" element={<NotFound />} />

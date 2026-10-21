@@ -53,12 +53,24 @@ async function main() {
   }
 
   // ── Users ──
-  const users = [
-    { username: 'admin', fullName: 'System Admin', role: 'ADMIN', password: pw('SEED_ADMIN_PASSWORD', 'Admin#12345') },
-    { username: 'manager', fullName: 'IT Manager', role: 'MANAGER', password: pw('SEED_MANAGER_PASSWORD', 'Manager#12345') },
-    { username: 'tl.tr1', fullName: 'Team Leader TR1', role: 'TEAM_LEADER', roomId: rooms.TR1.id, password: pw('SEED_TL_PASSWORD', 'Leader#12345') },
-    { username: 'tl.tr2', fullName: 'Team Leader TR2', role: 'TEAM_LEADER', roomId: rooms.TR2.id, password: pw('SEED_TL_PASSWORD', 'Leader#12345') },
-  ];
+    // CHANGE 7 / BE-17: real people mapped to roles. TEAM_LEADER rows carry scope 'OWN_ROOM';
+    // CALL_CENTER_MANAGER (CEO + assistant) are read-only across all call-center rooms (scope null).
+    const users = [
+      { username: 'admin', fullName: 'System Admin', role: 'ADMIN', scope: null, password: pw('SEED_ADMIN_PASSWORD', 'Admin#12345') },
+      { username: 'manager', fullName: 'IT Manager', role: 'MANAGER', scope: null, password: pw('SEED_MANAGER_PASSWORD', 'Manager#12345') },
+      { username: 'tl.tr1', fullName: 'Team Leader TR1', role: 'TEAM_LEADER', roomId: rooms.TR1.id, scope: 'OWN_ROOM', password: pw('SEED_TL_PASSWORD', 'Leader#12345') },
+      { username: 'tl.tr2', fullName: 'Team Leader TR2', role: 'TEAM_LEADER', roomId: rooms.TR2.id, scope: 'OWN_ROOM', password: pw('SEED_TL_PASSWORD', 'Leader#12345') },
+      // Real people (CHANGE 7)
+      { username: 'nour.awshar', fullName: 'Nour Awshar', role: 'ADMIN', scope: null, password: pw('SEED_NOUR_PASSWORD', 'Nour#12345') },
+      { username: 'abdulkader', fullName: 'Abdulkader', role: 'ADMIN', scope: null, password: pw('SEED_ABDULKADER_PASSWORD', 'Abdulkader#12345') },
+      { username: 'ayman', fullName: 'Ayman (IT)', role: 'ADMIN', scope: null, password: pw('SEED_AYMAN_PASSWORD', 'Ayman#12345') },
+      { username: 'mr.mahmoud', fullName: 'Mr Mahmoud (CEO)', role: 'CALL_CENTER_MANAGER', scope: null, password: pw('SEED_MAHMOUD_PASSWORD', 'Mahmoud#12345') },
+      { username: 'mr.ayman', fullName: 'Mr Ayman (assistant)', role: 'CALL_CENTER_MANAGER', scope: null, password: pw('SEED_MRAYMAN_PASSWORD', 'MrAyman#12345') },
+      { username: 'hazim', fullName: 'Hazim', role: 'TEAM_LEADER', roomId: rooms.TR1.id, scope: 'OWN_ROOM', password: pw('SEED_HAZIM_PASSWORD', 'Hazim#12345') },
+      { username: 'fateh', fullName: 'Fateh', role: 'TEAM_LEADER', roomId: rooms.TR2.id, scope: 'OWN_ROOM', password: pw('SEED_FATEH_PASSWORD', 'Fateh#12345') },
+      { username: 'diaa', fullName: 'Diaa', role: 'TEAM_LEADER', roomId: rooms.TR3.id, scope: 'OWN_ROOM', password: pw('SEED_DIAA_PASSWORD', 'Diaa#12345') },
+      { username: 'ayman.tr4', fullName: 'Ayman (TR4)', role: 'TEAM_LEADER', roomId: rooms.TR4.id, scope: 'OWN_ROOM', password: pw('SEED_AYMANTR4_PASSWORD', 'AymanTR4#12345') },
+        ];
   for (const { password, ...u } of users) {
     const existing = await prisma.user.findUnique({ where: { username: u.username } });
     if (existing) {
@@ -180,7 +192,7 @@ async function main() {
 
   const counts = await Promise.all([prisma.user.count(), prisma.departmentTeam.count(), prisma.room.count(), prisma.workIdentity.count(), prisma.employee.count(), prisma.assetCategory.count(), prisma.asset.count(), prisma.account.count()]);
   console.log('Seed complete:', Object.fromEntries(['users', 'departments', 'rooms', 'workIdentities', 'employees', 'categories', 'assets', 'accounts'].map((k, i) => [k, counts[i]])));
-  console.log('Logins: admin / manager / tl.tr1 / tl.tr2 (passwords from SEED_*_PASSWORD env, see server/README.md)');
+  console.log('Logins: admin / manager / tl.tr1 / tl.tr2 / nour.awshar / abdulkader / ayman / mr.mahmoud / mr.ayman / hazim / fateh / diaa / ayman.tr4 (passwords from SEED_*_PASSWORD env, see server/README.md)');
 }
 
 main()

@@ -59,6 +59,8 @@ enum UserRole {
   ADMIN
   MANAGER
   TEAM_LEADER
+  /// CEO + assistant: read-only across ALL call-center rooms (CHANGE 7 / BE-17).
+  CALL_CENTER_MANAGER
 }
 
 enum EmployeeStatus {
@@ -78,6 +80,11 @@ enum AssignmentType {
   PRINTER
   SIM
   GENERAL
+  COMPUTERS
+  MONITORS
+  MOUSE
+  KEYBOARDS
+  HEADPHONES
 }
 
 enum AssignmentStatus {
@@ -261,6 +268,9 @@ model User {
   role         UserRole
   roomId       String?  @db.Uuid
   room         Room?    @relation(fields: [roomId], references: [id])
+  /// Room-scope discriminator: null = unrestricted (ADMIN/MANAGER/CALL_CENTER_MANAGER),
+  /// 'OWN_ROOM' = TEAM_LEADER scoped to User.roomId (CHANGE 7 / BE-17).
+  scope        String?
   isActive     Boolean  @default(true)
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())

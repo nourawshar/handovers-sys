@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useDepartments, useRooms } from '@/api/hooks'
-import { Field, Input, Select } from '@/components/ui'
+import { Field, Input, SearchableSelect } from '@/components/ui'
 
 /** Manual work-identity input (CHANGE 4). Draft field shape used by both wizards. */
 export interface WorkIdentityValue {
@@ -55,17 +55,23 @@ export function WorkIdentityFields({ value, onChange, errors, className }: {
         <p className="text-sm text-slate-500">No work identity — the employee's real name is used.</p>
       )}
       <Field label="Department" required error={errors.departmentTeamId}>
-        <Select value={value.departmentTeamId} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
-          <option value="">— select department —</option>
-          {departments.data?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </Select>
+        <SearchableSelect
+          options={(departments.data ?? []).map((d) => ({ value: d.id, label: d.name }))}
+          value={value.departmentTeamId}
+          onChange={setDepartment}
+          placeholder="Type to filter departments…"
+          selectPlaceholder="— select department —"
+        />
       </Field>
       {isCallCenter && (
         <Field label="Room" hint="Call-center seats require a room" required error={errors.roomId}>
-          <Select value={value.roomId} onChange={(e) => onChange({ roomId: e.target.value })} aria-label="Room">
-            <option value="">— select room —</option>
-            {callCenterRooms.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
-          </Select>
+          <SearchableSelect
+            options={callCenterRooms.map((r) => ({ value: r.id, label: r.code }))}
+            value={value.roomId}
+            onChange={(roomId) => onChange({ roomId })}
+            placeholder="Type to filter rooms…"
+            selectPlaceholder="— select room —"
+          />
         </Field>
       )}
     </div>

@@ -8,9 +8,10 @@ import { useAuthStore } from '@/store/auth'
 import { isAdmin } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
 import { Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap, Textarea } from '@/components/ui'
+import AssetDrawer from '@/pages/assets/AssetDrawer'
 
 /** Devices currently held by an employee, from GET /assets?holderId=… (loaded on demand). */
-function Devices({ employeeId }: { employeeId: string }) {
+function Devices({ employeeId, onOpen }: { employeeId: string; onOpen: (id: string) => void }) {
   const { data, isLoading, isError } = useAssets({ holderId: employeeId, pageSize: 20 })
   if (isLoading) return <span className="text-xs text-slate-400">Loading…</span>
   if (isError) return <span className="text-xs text-red-600">Could not load devices</span>
@@ -18,7 +19,8 @@ function Devices({ employeeId }: { employeeId: string }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {data.items.map((d) => (
-        <Link key={d.id} to={`/assets/${d.id}`} className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs text-brand-800 hover:bg-brand-100" title={d.name}>{d.code}</Link>
+        <button key={d.id} type="button" onClick={() => onOpen(d.id)}
+          className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs text-brand-800 hover:bg-brand-100" title={d.name}>{d.code}</button>
       ))}
     </div>
   )
@@ -167,6 +169,7 @@ export default function EmployeesPage() {
   const [departmentTeamId, setDept] = useState('')
   const [page, setPage] = useState(1)
   const [open, setOpen] = useState<Set<string>>(new Set())
+  const [openAsset, setOpenAsset] = useState<string | null>(null)
   const [form, setForm] = useState<{ open: boolean; editing: Employee | null }>({ open: false, editing: null })
   const [deleteResult, setDeleteResult] = useState<{ kind: 'info' | 'warn'; text: string } | null>(null)
   const dq = useDebounce(q)
@@ -227,7 +230,7 @@ export default function EmployeesPage() {
                     <td className="td"><StatusBadge value={e.status} /></td>
                     <td className="td">
                       {open.has(e.id)
-                        ? <Devices employeeId={e.id} />
+                        ? <Devices employeeId={e.id} onOpen={setOpenAsset} />
                         : <Button size="sm" variant="ghost" onClick={() => setOpen((s) => new Set(s).add(e.id))}>View devices</Button>}
                     </td>
                     {admin && (
@@ -247,6 +250,7 @@ export default function EmployeesPage() {
         )}
       </div>
       {form.open && <EmployeeFormModal employee={form.editing} onClose={() => setForm({ open: false, editing: null })} />}
+      {openAsset && <AssetDrawer assetId={openAsset} onClose={() => setOpenAsset(null)} />}
     </>
   )
 }

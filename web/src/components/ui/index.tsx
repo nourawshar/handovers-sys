@@ -1,5 +1,5 @@
-import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
-import { AlertCircle, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { forwardRef, useMemo, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { AlertCircle, ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react'
 import { cn, titleCase } from '@/lib/utils'
 
 /* ---------- Button ---------- */
@@ -59,6 +59,67 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
   function Select({ className, invalid, children, ...p }, ref) {
     return <select ref={ref} className={cn('input pr-8', invalid && 'input-error', className)} {...p}>{children}</select>
   })
+
+/* ---------- SearchableSelect (CHANGE 5, FE-17) ---------- */
+export interface SearchableOption {
+  value: string
+  label: string
+}
+
+/**
+ * Type-to-filter dropdown: a text `<Input>` filters the options as the user types (case-insensitive
+ * substring on `label`), then a native `<Select>` renders only the matches. Keeps the native select
+ * for accessibility/scroll, so no long dropdown requires scrolling the full list.
+ *
+ * The currently selected option is force-included in the visible list even when the filter would hide
+ * it — the native select must be able to render `value` or it shows a blank. The filter resets on pick.
+ */
+export function SearchableSelect({ options, value, onChange, placeholder = 'Type to filter…', selectPlaceholder = '— select —', notFound = 'No matching options', disabled, className }: {
+  options: SearchableOption[]
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  selectPlaceholder?: string
+  notFound?: string
+  disabled?: boolean
+  className?: string
+}) {
+  const [filter, setFilter] = useState('')
+  const needle = filter.trim().toLowerCase()
+  const filtered = useMemo(
+    () => options.filter((o) => !needle || o.label.toLowerCase().includes(needle)),
+    [options, needle],
+  )
+  const visible = useMemo(() => {
+    if (!value) return filtered
+    if (filtered.some((o) => o.value === value)) return filtered
+    const selected = options.find((o) => o.value === value)
+    return selected ? [selected, ...filtered] : filtered
+  }, [filtered, options, value])
+  const noMatch = !!needle && filtered.length === 0
+
+  return (
+    <div className={cn('space-y-1', className)}>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+        <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={placeholder} className="pl-9" aria-label={placeholder} />
+      </div>
+      <Select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => {
+          setFilter('')
+          onChange(e.target.value)
+        }}
+        aria-label={placeholder}
+      >
+        <option value="">{selectPlaceholder}</option>
+        {visible.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </Select>
+      {noMatch && <p className="text-xs text-slate-500">{notFound}</p>}
+    </div>
+  )
+}
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }>(
   function Textarea({ className, invalid, ...p }, ref) {
     return <textarea ref={ref} rows={3} className={cn('input', invalid && 'input-error', className)} {...p} />

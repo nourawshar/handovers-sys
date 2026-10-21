@@ -23,7 +23,7 @@ async function authenticate(req, res, next) {
 
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, username: true, fullName: true, role: true, roomId: true, isActive: true },
+      select: { id: true, username: true, fullName: true, role: true, roomId: true, scope: true, isActive: true },
     });
     if (!user || !user.isActive) throw unauthorized('Account disabled or not found');
     req.user = user;

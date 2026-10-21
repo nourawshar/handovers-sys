@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { useAssets, useEmployee } from '@/api/hooks'
 import { fmtDate } from '@/lib/utils'
 import { EmptyState, ErrorState, Badge, PageHeader, Spinner, StatusBadge, TableWrap } from '@/components/ui'
+import AssetDrawer from '@/pages/assets/AssetDrawer'
 
 /** Chips for the devices an employee currently holds (GET /assets?holderId=…). */
-function HeldDevices({ employeeId }: { employeeId: string }) {
+function HeldDevices({ employeeId, onOpen }: { employeeId: string; onOpen: (id: string) => void }) {
   const { data, isLoading, isError } = useAssets({ holderId: employeeId, pageSize: 50 })
   if (isLoading) return <span className="text-xs text-slate-400">Loading…</span>
   if (isError) return <span className="text-xs text-red-600">Could not load devices</span>
@@ -13,7 +15,8 @@ function HeldDevices({ employeeId }: { employeeId: string }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {data.items.map((d) => (
-        <Link key={d.id} to={`/assets/${d.id}`} className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs text-brand-800 hover:bg-brand-100" title={d.name}>{d.code}</Link>
+        <button key={d.id} type="button" onClick={() => onOpen(d.id)}
+          className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs text-brand-800 hover:bg-brand-100" title={d.name}>{d.code}</button>
       ))}
     </div>
   )
@@ -22,6 +25,7 @@ function HeldDevices({ employeeId }: { employeeId: string }) {
 export default function EmployeeDetailPage() {
   const { id = '' } = useParams()
   const { data, isLoading, isError, refetch } = useEmployee(id)
+  const [openAsset, setOpenAsset] = useState<string | null>(null)
 
   return (
     <>
@@ -51,7 +55,7 @@ export default function EmployeeDetailPage() {
             </div>
             <div className="card lg:col-span-2">
               <h3 className="label mb-2">Devices currently held ({data.employee.fullName})</h3>
-              <HeldDevices employeeId={data.employee.id} />
+              <HeldDevices employeeId={data.employee.id} onOpen={setOpenAsset} />
             </div>
           </div>
 
@@ -88,6 +92,7 @@ export default function EmployeeDetailPage() {
           </div>
         </>
       )}
+      {openAsset && <AssetDrawer assetId={openAsset} onClose={() => setOpenAsset(null)} />}
     </>
   )
 }

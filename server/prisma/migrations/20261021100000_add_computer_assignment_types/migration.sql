@@ -1,0 +1,6 @@
+-- AlterEnum
+ALTER TYPE "AssignmentType" ADD VALUE 'COMPUTERS';
+ALTER TYPE "AssignmentType" ADD VALUE 'MONITORS';
+ALTER TYPE "AssignmentType" ADD VALUE 'MOUSE';
+ALTER TYPE "AssignmentType" ADD VALUE 'KEYBOARDS';
+ALTER TYPE "AssignmentType" ADD VALUE 'HEADPHONES';

@@ -2,7 +2,7 @@
 // and docs/API_CONTRACT.md. Where the server deviates from the contract, the deviation is handled
 // here (and listed in the handoff) so a future reconciliation is a one-file change.
 import type {
-  Account, Asset, BackupStalenessRow, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, ConditionRow,
+  Account, Asset, AuditLogEntry, BackupStalenessRow, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, ConditionRow,
   Employee, EmployeeHistoryEntry, ListResult, OutstandingAssignmentRow, PhoneAssignmentDetail, Photo, ReportRow, ReturnForm, ReturnResult, Room,
     RoomCompositionRow, SelectOption, TimelineEntry, User, WhoHasWhatRow, WorkIdentity, Department,
     } from './types'
@@ -161,6 +161,21 @@ export function normAccount(a: R): Account {
     isActive: a.isActive !== false,
     currentAssignmentId: a.currentAssignmentId ?? null,
     notes: str(a.notes),
+  }
+}
+
+export function normAuditLog(l: R): AuditLogEntry {
+  return {
+    id: String(l.id),
+    actor: l.actor && typeof l.actor === 'object'
+      ? { id: String(l.actor.id), fullName: l.actor.fullName ?? '', username: l.actor.username ?? '' }
+      : null,
+    action: l.action ?? '',
+    targetType: l.targetType ?? null,
+    targetId: l.targetId ?? null,
+    meta: obj(l.meta),
+    ip: l.ip ?? null,
+    createdAt: l.createdAt,
   }
 }
 

@@ -50,6 +50,7 @@ function createApp() {
   api.use('/rooms', require('./routes/rooms.routes')); // BE-7 rooms CRUD (Phase 5) — mounted before lookups
   api.use('/employees', require('./routes/employees.routes')); // BE-6 employees CRUD (Phase 5) — mounted before lookups
   api.use('/departments', require('./routes/departments.routes')); // BE-9 departments CRUD (SIM/WhatsApp corrections)
+  api.use('/audit-logs', require('./routes/audit-logs.routes')); // BE-17 audit trail (ADMIN only)
   api.use('/', require('./routes/lookups.routes')); // /work-identities (read-only)
   app.use('/api/v1', api);
 

@@ -15,10 +15,11 @@ export type RouteKey =
   | 'reports'
   | 'settings.categories'
   | 'settings.users'
+  | 'settings.logs'
 
-const ALL: Role[] = ['ADMIN', 'MANAGER', 'TEAM_LEADER']
+const ALL: Role[] = ['ADMIN', 'MANAGER', 'TEAM_LEADER', 'CALL_CENTER_MANAGER']
 const ADMIN: Role[] = ['ADMIN']
-const MGR: Role[] = ['ADMIN', 'MANAGER']
+const MGR: Role[] = ['ADMIN', 'MANAGER', 'CALL_CENTER_MANAGER']
 
 // NOTE: README §7 lists /reports as Manager/Admin, but §9 + contract §11 say Team Leaders can view
 // reports within their own room scope (no export). We follow §9/§11 (R10): the route is open to ALL,
@@ -37,6 +38,7 @@ export const ROUTE_ACCESS: Record<RouteKey, Role[]> = {
   reports: ALL,
   'settings.categories': ADMIN,
   'settings.users': ADMIN,
+  'settings.logs': ADMIN,
 }
 
 export function can(role: Role | undefined | null, key: RouteKey): boolean {
@@ -49,6 +51,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   ADMIN: 'Admin',
   MANAGER: 'Manager',
   TEAM_LEADER: 'Team Leader',
+  CALL_CENTER_MANAGER: 'Call Center Manager',
 }
 
 /** Role-aware landing page. Everyone lands on the dashboard; kept as a function so it can diverge per role. */
@@ -57,6 +60,7 @@ export function homeFor(role: Role | undefined | null): string {
     case 'ADMIN':
     case 'MANAGER':
     case 'TEAM_LEADER':
+    case 'CALL_CENTER_MANAGER':
       return '/dashboard'
     default:
       return '/login'

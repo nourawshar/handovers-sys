@@ -8,7 +8,7 @@ import type { PhoneAssignmentPayload, WaVariant, WorkIdentityInput } from '@/api
 import { WA_VARIANTS } from '@/api/types'
 import { useDebounce } from '@/lib/useDebounce'
 import { fmtDate, titleCase } from '@/lib/utils'
-import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Select, Spinner } from '@/components/ui'
+import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, SearchableSelect, Select, Spinner } from '@/components/ui'
 import { WorkIdentityFields, type WorkIdentityValue } from '@/pages/assignments/WorkIdentityFields'
 
 /* ------------------------------------------------------------------ */
@@ -193,10 +193,13 @@ export function WaFields({ wa, onChange, required, title, backupEmailOptions = [
       <legend className="px-1 text-sm font-semibold text-slate-900">{title}</legend>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Backup Gmail" hint="Gmail account used for WhatsApp backup" required={required}>
-          <Select value={wa.backupEmail} onChange={(e) => set({ backupEmail: e.target.value })}>
-            <option value="">— select backup Gmail —</option>
-            {backupEmailOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </Select>
+          <SearchableSelect
+            options={backupEmailOptions}
+            value={wa.backupEmail}
+            onChange={(v) => set({ backupEmail: v })}
+            placeholder="Type to filter emails…"
+            selectPlaceholder="— select backup Gmail —"
+          />
         </Field>
         <Field label="Backup date" required={required}>
           <Input type="date" value={wa.backupDate} onChange={(e) => set({ backupDate: e.target.value })} />
@@ -459,10 +462,13 @@ export default function PhoneAssignPage() {
         {step === 0 && (
           <div className="space-y-4">
             <Field label="Employee" required error={errors.employeeId} className="sm:max-w-sm">
-              <Select value={draft.employeeId} onChange={(e) => setDraft({ ...draft, employeeId: e.target.value })}>
-                <option value="">— select employee —</option>
-                {employees.data?.items.map((emp) => <option key={emp.id} value={emp.id}>{emp.fullName}</option>)}
-              </Select>
+              <SearchableSelect
+                options={(employees.data?.items ?? []).map((emp) => ({ value: emp.id, label: emp.fullName }))}
+                value={draft.employeeId}
+                onChange={(employeeId) => setDraft({ ...draft, employeeId })}
+                placeholder="Type to filter employees…"
+                selectPlaceholder="— select employee —"
+              />
             </Field>
             <WorkIdentityFields
               value={draft.workIdentity}
@@ -481,20 +487,17 @@ export default function PhoneAssignPage() {
           <div className="space-y-4">
             <Field label="SIM card asset" required error={errors.sim1Number}
               hint="The SIM's number is the single source for both SIM 1 and the main WhatsApp number.">
-              <Select
+              <SearchableSelect
+                options={(sims.data?.items ?? []).map((s) => ({ value: s.id, label: `${s.code} · ${s.name} · ${simNumber(s) || 'no number'}` }))}
                 value={draft.sim1AssetId}
-                onChange={(e) => {
-                  const id = e.target.value
+                onChange={(id) => {
                   const asset = sims.data?.items.find((s) => s.id === id)
                   const num = simNumber(asset)
                   setDraft({ ...draft, sim1AssetId: id, sim1Number: num, wa1: { ...draft.wa1, phoneNumber: num } })
                 }}
-              >
-                <option value="">— select SIM card asset —</option>
-                {sims.data?.items.map((s) => (
-                  <option key={s.id} value={s.id}>{s.code} · {s.name} · {simNumber(s) || 'no number'}</option>
-                ))}
-              </Select>
+                placeholder="Type to filter SIMs…"
+                selectPlaceholder="— select SIM card asset —"
+              />
               {draft.sim1Number && (
                 <p className="mt-1 text-xs text-slate-500">SIM 1 / WhatsApp number: <span className="font-mono font-semibold text-slate-800">{draft.sim1Number}</span></p>
               )}
@@ -514,20 +517,17 @@ export default function PhoneAssignPage() {
               <div className="space-y-4">
                 <Field label="SIM card asset (secondary)"
                   hint="The SIM's number is the single source for both SIM 2 and the secondary WhatsApp number.">
-                  <Select
+                  <SearchableSelect
+                    options={(sims.data?.items ?? []).map((s) => ({ value: s.id, label: `${s.code} · ${s.name} · ${simNumber(s) || 'no number'}` }))}
                     value={draft.sim2AssetId}
-                    onChange={(e) => {
-                      const id = e.target.value
+                    onChange={(id) => {
                       const asset = sims.data?.items.find((s) => s.id === id)
                       const num = simNumber(asset)
                       setDraft({ ...draft, sim2AssetId: id, sim2Number: num, wa2: { ...draft.wa2, phoneNumber: num } })
                     }}
-                  >
-                    <option value="">— select SIM card asset —</option>
-                    {sims.data?.items.map((s) => (
-                      <option key={s.id} value={s.id}>{s.code} · {s.name} · {simNumber(s) || 'no number'}</option>
-                    ))}
-                  </Select>
+                    placeholder="Type to filter SIMs…"
+                    selectPlaceholder="— select SIM card asset —"
+                  />
                   {draft.sim2Number && (
                     <p className="mt-1 text-xs text-slate-500">SIM 2 / WhatsApp number: <span className="font-mono font-semibold text-slate-800">{draft.sim2Number}</span></p>
                   )}
@@ -541,23 +541,32 @@ export default function PhoneAssignPage() {
         {step === 4 && (
           <div className="space-y-4">
             <Field label="Bitrix account" error={errors.bitrixAccountId}>
-              <Select value={draft.bitrixAccountId} onChange={(e) => setDraft({ ...draft, bitrixAccountId: e.target.value })}>
-                <option value="">— none —</option>
-                {accounts.data?.items.map((a) => <option key={a.id} value={a.id}>{a.identifier || a.email}</option>)}
-              </Select>
+              <SearchableSelect
+                options={(accounts.data?.items ?? []).map((a) => ({ value: a.id, label: a.identifier || a.email || a.id }))}
+                value={draft.bitrixAccountId}
+                onChange={(bitrixAccountId) => setDraft({ ...draft, bitrixAccountId })}
+                placeholder="Type to filter accounts…"
+                selectPlaceholder="— none —"
+              />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Charger cable" error={errors.chargerCableAssetId}>
-                <Select value={draft.chargerCableAssetId} onChange={(e) => setDraft({ ...draft, chargerCableAssetId: e.target.value })}>
-                  <option value="">— none —</option>
-                  {cables.data?.items.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name} · {a.condition}</option>)}
-                </Select>
+                <SearchableSelect
+                  options={(cables.data?.items ?? []).map((a) => ({ value: a.id, label: `${a.code} · ${a.name} · ${a.condition}` }))}
+                  value={draft.chargerCableAssetId}
+                  onChange={(chargerCableAssetId) => setDraft({ ...draft, chargerCableAssetId })}
+                  placeholder="Type to filter cables…"
+                  selectPlaceholder="— none —"
+                />
               </Field>
               <Field label="Charger adapter" error={errors.chargerAdapterAssetId}>
-                <Select value={draft.chargerAdapterAssetId} onChange={(e) => setDraft({ ...draft, chargerAdapterAssetId: e.target.value })}>
-                  <option value="">— none —</option>
-                  {adapters.data?.items.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name} · {a.condition}</option>)}
-                </Select>
+                <SearchableSelect
+                  options={(adapters.data?.items ?? []).map((a) => ({ value: a.id, label: `${a.code} · ${a.name} · ${a.condition}` }))}
+                  value={draft.chargerAdapterAssetId}
+                  onChange={(chargerAdapterAssetId) => setDraft({ ...draft, chargerAdapterAssetId })}
+                  placeholder="Type to filter adapters…"
+                  selectPlaceholder="— none —"
+                />
               </Field>
             </div>
             <Field label="Notes">
