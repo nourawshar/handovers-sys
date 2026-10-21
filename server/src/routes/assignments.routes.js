@@ -110,6 +110,8 @@ router.get(
           { asset: { code: { contains: f.q, mode: 'insensitive' } } },
           { asset: { name: { contains: f.q, mode: 'insensitive' } } },
           { asset: { phoneDetail: { imei: { contains: f.q } } } },
+          { phoneDetail: { sim1Number: { contains: f.q } } },
+          { phoneDetail: { sim2Number: { contains: f.q } } },
           { employee: { fullName: { contains: f.q, mode: 'insensitive' } } },
           { workIdentity: { name: { contains: f.q, mode: 'insensitive' } } },
         ],

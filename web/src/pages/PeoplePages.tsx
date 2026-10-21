@@ -11,9 +11,18 @@ import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagina
 
 export function AssignmentsPage() {
   const [status, setStatus] = useState('')
+  const [type, setType] = useState('')
+  const [q, setQ] = useState('')
+  const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const user = useAuthStore((s) => s.user)
-  const list = useAssignments({ status: status || undefined, page, pageSize: 25 })
+  const list = useAssignments({
+    status: status || undefined,
+    type: type || undefined,
+    q: search || undefined,
+    page,
+    pageSize: 25,
+  })
   return (
     <>
       <PageHeader
@@ -26,11 +35,30 @@ export function AssignmentsPage() {
           </>
         )}
       />
-      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
-        <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }} aria-label="Status">
-          <option value="">Any status</option>
-          {['DRAFT', 'ACTIVE', 'RETURNED', 'CLOSED'].map((s) => <option key={s} value={s}>{titleCase(s)}</option>)}
-        </Select>
+      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="Search">
+          <Input
+            value={q}
+            placeholder="Name, work name, SIM, IMEI, model, code…"
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { setSearch(q.trim()); setPage(1) } }}
+          />
+        </Field>
+        <Field label="Type">
+          <Select value={type} onChange={(e) => { setType(e.target.value); setPage(1) }} aria-label="Type">
+            <option value="">Any type</option>
+            {['PHONE', 'LAPTOP', 'PRINTER', 'SIM', 'COMPUTERS', 'MONITORS', 'MOUSE', 'KEYBOARDS', 'HEADPHONES', 'GENERAL'].map((t) => <option key={t} value={t}>{titleCase(t)}</option>)}
+          </Select>
+        </Field>
+        <Field label="Status">
+          <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }} aria-label="Status">
+            <option value="">Any status</option>
+            {['DRAFT', 'ACTIVE', 'RETURNED', 'CLOSED'].map((s) => <option key={s} value={s}>{titleCase(s)}</option>)}
+          </Select>
+        </Field>
+        <div className="flex items-end gap-2">
+          <Button variant="secondary" className="w-full" onClick={() => { setQ(''); setSearch(''); setStatus(''); setType(''); setPage(1) }}>Clear</Button>
+        </div>
       </div>
       <div className="card overflow-hidden">
         {list.isLoading ? <Spinner /> : list.isError && (list.error as { status?: number }).status === 404 ? (
