@@ -320,7 +320,7 @@ export function normReturnForm(raw: unknown): ReturnForm {
       employeeFullName: o.employeeFullName ?? '', workIdentityName: o.workIdentityName ?? '',
       assetCode: o.assetCode ?? '', assetName: o.assetName ?? '', condition: o.condition ?? '',
       wa1ChatNormalCount: num(o.wa1ChatNormalCount), wa1ChatArchivedCount: num(o.wa1ChatArchivedCount),
-      wa1BackupDate: str(o.wa1BackupDate), wa1BackupUsedGB: num(o.wa1BackupUsedGB), wa1BackupTotalGB: num(o.wa1BackupTotalGB),
+      wa1BackupDate: str(o.wa1BackupDate), wa1BackupUsedGB: num(o.wa1BackupUsedGB),      wa1BackupTotalGB: num(o.wa1BackupTotalGB),
       wa1BackupEmail: str(o.wa1BackupEmail),
       wa2ChatNormalCount: num(o.wa2ChatNormalCount), wa2ChatArchivedCount: num(o.wa2ChatArchivedCount),
       wa2BackupDate: str(o.wa2BackupDate), wa2BackupUsedGB: num(o.wa2BackupUsedGB), wa2BackupTotalGB: num(o.wa2BackupTotalGB),

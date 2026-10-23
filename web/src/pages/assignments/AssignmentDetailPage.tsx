@@ -26,6 +26,7 @@ function fmtVal(v: unknown): string {
 /** Shape of the `returnState` captured in a RETURNED timeline entry snapshot. */
 interface ReturnStateData {
   condition?: string | null
+  returnCondition?: string | null
   wa1ChatNormalCount?: unknown
   wa1ChatArchivedCount?: unknown
   wa1BackupDate?: string | null
@@ -196,20 +197,20 @@ export default function AssignmentDetailPage() {
               <div className="card p-5">
                 <h2 className="mb-1 text-sm font-semibold text-slate-900">Return record</h2>
                 <dl className="divide-y divide-slate-100 text-sm">
-                  <Row label="Condition">{titleCase(String((retState?.condition as string) ?? ''))}</Row>
-                  <Row label="Chats 1 (normal)">{fmtVal(retState?.wa1ChatNormalCount)}</Row>
-                  <Row label="Chats 1 (archived)">{fmtVal(retState?.wa1ChatArchivedCount)}</Row>
-                  <Row label="Backup date 1">{retState?.wa1BackupDate ? fmtDate(retState.wa1BackupDate) : '—'}</Row>
-                  <Row label="Backup size 1">{fmtVal(retState?.wa1BackupUsedGB)} GB of {fmtVal(retState?.wa1BackupTotalGB)} GB</Row>
-                  <Row label="Chats 2 (normal)">{fmtVal(retState?.wa2ChatNormalCount)}</Row>
-                  <Row label="Chats 2 (archived)">{fmtVal(retState?.wa2ChatArchivedCount)}</Row>
-                  <Row label="Backup date 2">{retState?.wa2BackupDate ? fmtDate(retState.wa2BackupDate) : '—'}</Row>
-                  <Row label="Backup size 2">{fmtVal(retState?.wa2BackupUsedGB)} GB of {fmtVal(retState?.wa2BackupTotalGB)} GB</Row>
-                  <Row label="SIM 1">{fmtVal(retState?.sim1Number)}</Row>
-                  <Row label="SIM 2">{fmtVal(retState?.sim2Number)}</Row>
-                  <Row label="Bitrix">{fmtVal(retState?.bitrixAccountId)}</Row>
-                  <Row label="Charger cable">{fmtVal(retState?.chargerCableAssetId)}</Row>
-                  <Row label="Charger adapter">{fmtVal(retState?.chargerAdapterAssetId)}</Row>
+                  <Row label="Condition">{retEntry?.snapshot ? (retEntry.snapshot as Record<string, unknown>).returnCondition ? titleCase(String((retEntry.snapshot as Record<string, unknown>).returnCondition)) : '—' : '—'}</Row>
+                  <Row label="Chats 1 (normal)">{fmtVal(retState?.wa1ChatNormalCount as string)}</Row>
+                  <Row label="Chats 1 (archived)">{fmtVal(retState?.wa1ChatArchivedCount as string)}</Row>
+                  <Row label="Backup date 1">{retState?.wa1BackupDate ? fmtDate(retState.wa1BackupDate as string) : '—'}</Row>
+                  <Row label="Backup size 1">{fmtVal(retState?.wa1BackupUsedGB as string)} GB of {fmtVal(retState?.wa1BackupTotalGB as string)} GB</Row>
+                  <Row label="Chats 2 (normal)">{fmtVal(retState?.wa2ChatNormalCount as string)}</Row>
+                  <Row label="Chats 2 (archived)">{fmtVal(retState?.wa2ChatArchivedCount as string)}</Row>
+                  <Row label="Backup date 2">{retState?.wa2BackupDate ? fmtDate(retState.wa2BackupDate as string) : '—'}</Row>
+                  <Row label="Backup size 2">{fmtVal(retState?.wa2BackupUsedGB as string)} GB of {fmtVal(retState?.wa2BackupTotalGB as string)} GB</Row>
+                  <Row label="SIM 1">{fmtVal(retState?.sim1Number as string)}</Row>
+                  <Row label="SIM 2">{fmtVal(retState?.sim2Number as string)}</Row>
+                  <Row label="Bitrix">{fmtVal(retState?.bitrixAccountId as string)}</Row>
+                  <Row label="Charger cable">{fmtVal(retState?.chargerCableAssetId as string)}</Row>
+                  <Row label="Charger adapter">{fmtVal(retState?.chargerAdapterAssetId as string)}</Row>
                 </dl>
               </div>
             )}

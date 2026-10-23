@@ -75,6 +75,7 @@ function buildReturnPayload(f: ReturnFormState) {
       bitrixAccountId: toStr(f.bitrixAccountId),
       chargerCableAssetId: toStr(f.chargerCableAssetId),
       chargerAdapterAssetId: toStr(f.chargerAdapterAssetId),
+      condition: f.returnCondition,
     },
   }
 }
@@ -152,17 +153,21 @@ function ComparisonTable({ comparison }: { comparison: ComparisonField[] }) {
 
 /** Old (handover) vs new (return) photos, front and back side by side. */
 function PhotoComparison({ oldPhotos, newPhotos }: { oldPhotos: Photo[]; newPhotos: Photo[] }) {
-  const tile = (t: 'FRONT' | 'BACK', list: Photo[]) => {
+  const tile = (t: 'FRONT' | 'BACK', list: Photo[], tone: 'blue' | 'green') => {
     const p = list.find((x) => x.type?.toUpperCase() === t)
+    const isHandover = tone === 'blue'
     return p
-      ? <img key={t} src={p.url} alt={`${titleCase(t)} ${p.type}`} className="aspect-square w-full rounded-lg border border-slate-200 object-cover" />
+      ? <div className="relative aspect-square w-full rounded-lg border border-slate-200">
+          <img src={p.url} alt={`${titleCase(t)} ${p.type}`} className="aspect-square w-full rounded-lg object-cover" />
+          <span className={"absolute bottom-1 right-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600"}>{isHandover ? 'At handover' : 'At return'}</span>
+        </div>
       : <div key={t} className="flex aspect-square w-full items-center justify-center rounded-lg border-2 border-dashed text-xs text-slate-400">{titleCase(t)}</div>
   }
-  const side = (heading: string, list: Photo[]) => (
+  const side = (heading: string, list: Photo[], tone: 'blue' | 'green') => (
     <div>
       <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{heading}</p>
       <div className="grid grid-cols-2 gap-2">
-        {(['FRONT', 'BACK'] as const).map((t) => tile(t, list))}
+        {(['FRONT', 'BACK'] as const).map((t) => tile(t, list, tone))}
       </div>
     </div>
   )
@@ -170,8 +175,8 @@ function PhotoComparison({ oldPhotos, newPhotos }: { oldPhotos: Photo[]; newPhot
     <div className="card overflow-hidden">
       <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Photos</div>
       <div className="grid gap-4 p-4 sm:grid-cols-2">
-        {side('At handover', oldPhotos)}
-        {side('At return', newPhotos)}
+        {side('At handover', oldPhotos, 'blue')}
+        {side('At return', newPhotos, 'green')}
       </div>
     </div>
   )

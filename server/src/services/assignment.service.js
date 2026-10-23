@@ -270,6 +270,7 @@ async function createPhoneAssignment(body, userId) {
     wa2ChatNormalCount, wa2ChatArchivedCount, wa2AppVariant,
     bitrixAccountId, chargerCableAssetId, chargerAdapterAssetId,
     expectedReturnAt, notes,
+    condition,
   } = body;
 
   const assetIds = phoneAssetIds({ phoneAssetId, sim1AssetId, sim2AssetId, chargerCableAssetId, chargerAdapterAssetId });
@@ -323,10 +324,10 @@ async function createPhoneAssignment(body, userId) {
     // Assignment items: PRIMARY + SIM1 + SIM2 + CHARGER_CABLE + CHARGER_ADAPTER (only for present assets).
     const items = [
       { assetId: phoneAssetId, role: 'PRIMARY', conditionAtHandover: phoneAsset.condition },
-      ...(sim1AssetId ? [{ assetId: sim1AssetId, role: 'SIM1', conditionAtHandover: 'GOOD' }] : []),
-      ...(sim2AssetId ? [{ assetId: sim2AssetId, role: 'SIM2', conditionAtHandover: 'GOOD' }] : []),
-      ...(chargerCableAssetId ? [{ assetId: chargerCableAssetId, role: 'CHARGER_CABLE', conditionAtHandover: 'GOOD' }] : []),
-      ...(chargerAdapterAssetId ? [{ assetId: chargerAdapterAssetId, role: 'CHARGER_ADAPTER', conditionAtHandover: 'GOOD' }] : []),
+      ...(sim1AssetId ? [{ assetId: sim1AssetId, role: 'SIM1', conditionAtHandover: condition ?? 'GOOD' }] : []),
+      ...(sim2AssetId ? [{ assetId: sim2AssetId, role: 'SIM2', conditionAtHandover: condition ?? 'GOOD' }] : []),
+      ...(chargerCableAssetId ? [{ assetId: chargerCableAssetId, role: 'CHARGER_CABLE', conditionAtHandover: condition ?? 'GOOD' }] : []),
+      ...(chargerAdapterAssetId ? [{ assetId: chargerAdapterAssetId, role: 'CHARGER_ADAPTER', conditionAtHandover: condition ?? 'GOOD' }] : []),
     ];
     await tx.assignmentItem.createMany({
       data: items.map((i) => ({ ...i, assignmentId: assignment.id, isActive: true })),

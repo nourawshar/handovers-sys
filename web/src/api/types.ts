@@ -261,6 +261,7 @@ export type WaVariant = (typeof WA_VARIANTS)[number]
 export interface PhoneAssignmentDetail {
   sim1Number: string | null
   sim1AssetId?: string | null
+  condition?: string | null
   wa1Business: boolean
   wa1PhoneNumber: string | null
   wa1BackupEmail: string | null

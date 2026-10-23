@@ -217,6 +217,7 @@ const phoneBody = z
     chargerAdapterAssetId: z.uuid().nullish(),
     expectedReturnAt: dateish.nullish(),
     notes: z.string().trim().max(5000).nullish(),
+    condition: z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED']).nullish(),
   })
   .strict();
 
