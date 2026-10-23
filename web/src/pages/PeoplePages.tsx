@@ -67,7 +67,7 @@ export function AssignmentsPage() {
           <>
             <TableWrap>
               <thead className="bg-slate-50"><tr>
-                <th className="th">Code</th><th className="th">Type</th><th className="th">Employee</th><th className="th">Identity</th><th className="th">Asset</th><th className="th">Assigned</th><th className="th">Due</th><th className="th">Status</th><th className="th">View</th>
+                <th className="th">Code</th><th className="th">Type</th><th className="th">Employee</th><th className="th">Identity</th><th className="th">Asset</th><th className="th">Model</th><th className="th">Assigned</th><th className="th">Status</th><th className="th">View</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {list.data.items.map((a) => (
@@ -78,7 +78,7 @@ export function AssignmentsPage() {
                     <td className="td">{a.workIdentity?.name ?? '—'}</td>
                     <td className="td">{a.asset ? <Link to={`/assets/${a.asset.id}`} className="text-brand-700 hover:underline">{a.asset.code}</Link> : '—'}</td>
                     <td className="td">{fmtDate(a.assignedAt)}</td>
-                    <td className="td">{fmtDate(a.expectedReturnAt)}</td>
+                    <td className="td">{a.asset?.phone?.model ?? '—'}</td>
                     <td className="td"><StatusBadge value={a.status} /></td>
                     <td className="td"><Link to={`/assignments/${a.id}`}><Button size="sm" variant="secondary">View</Button></Link></td>
                   </tr>

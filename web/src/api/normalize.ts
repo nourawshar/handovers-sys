@@ -238,16 +238,25 @@ export const normWorkIdentity = (w: R): WorkIdentity => ({
 })
 
 /** Contract §7.1 returns flat `employeeName`/`assetCode`…; §7.2 returns nested objects. Accept both. */
-export const normAssignment = (a: R): Assignment => ({
-  id: String(a.id),
-  assignmentCode: a.assignmentCode ?? String(a.id),
-  type: a.type,
-  status: a.status,
-  employee: a.employee ?? (a.employeeId ? { id: a.employeeId, fullName: a.employeeName ?? '' } : null),
-  workIdentity: a.workIdentity ?? (a.workIdentityId ? { id: a.workIdentityId, name: a.workIdentityName ?? '' } : null),
-  asset: a.asset ?? (a.assetId ? { id: a.assetId, code: a.assetCode ?? '', name: a.assetName ?? '' } : null),
-  assignedAt: a.assignedAt, expectedReturnAt: a.expectedReturnAt, returnedAt: a.returnedAt,
-})
+export const normAssignment = (a: R): Assignment => {
+  const baseAsset = a.asset ?? (a.assetId ? { id: a.assetId, code: a.assetCode ?? '', name: a.assetName ?? '' } : null)
+  const asset: Assignment['asset'] = baseAsset
+    ? {
+        ...baseAsset,
+        phone: a.asset?.phoneDetail ? { make: a.asset.phoneDetail.make ?? null, model: a.asset.phoneDetail.model ?? null } : null,
+      }
+    : null
+  return {
+    id: String(a.id),
+    assignmentCode: a.assignmentCode ?? String(a.id),
+    type: a.type,
+    status: a.status,
+    employee: a.employee ?? (a.employeeId ? { id: a.employeeId, fullName: a.employeeName ?? '' } : null),
+    workIdentity: a.workIdentity ?? (a.workIdentityId ? { id: a.workIdentityId, name: a.workIdentityName ?? '' } : null),
+    asset,
+    assignedAt: a.assignedAt, expectedReturnAt: a.expectedReturnAt, returnedAt: a.returnedAt,
+  }
+}
 
 const num = (v: unknown): number | null => (v === undefined || v === null || v === '' ? null : Number(v))
 const bool = (v: unknown): boolean => v === true || v === 'true'

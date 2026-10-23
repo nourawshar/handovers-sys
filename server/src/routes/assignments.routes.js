@@ -128,7 +128,7 @@ router.get(
           assignedAt: true, expectedReturnAt: true, returnedAt: true, createdById: true,
           employee: { select: { id: true, fullName: true } },
           workIdentity: { select: { id: true, name: true } },
-          asset: { select: { id: true, code: true, name: true } },
+          asset: { select: { id: true, code: true, name: true, phoneDetail: { select: { make: true, model: true } } } },
         },
         ...paginate(f),
       }),

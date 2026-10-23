@@ -17,6 +17,32 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
+/** Safely convert an unknown value to a display string. */
+function fmtVal(v: unknown): string {
+  if (v === null || v === undefined) return '—'
+  return String(v)
+}
+
+/** Shape of the `returnState` captured in a RETURNED timeline entry snapshot. */
+interface ReturnStateData {
+  condition?: string | null
+  wa1ChatNormalCount?: unknown
+  wa1ChatArchivedCount?: unknown
+  wa1BackupDate?: string | null
+  wa1BackupUsedGB?: unknown
+  wa1BackupTotalGB?: unknown
+  wa2ChatNormalCount?: unknown
+  wa2ChatArchivedCount?: unknown
+  wa2BackupDate?: string | null
+  wa2BackupUsedGB?: unknown
+  wa2BackupTotalGB?: unknown
+  sim1Number?: string | null
+  sim2Number?: string | null
+  bitrixAccountId?: string | null
+  chargerCableAssetId?: string | null
+  chargerAdapterAssetId?: string | null
+}
+
 const backupStr = (used: number | null, total: number | null) => {
   if (used === null && total === null) return 'not recorded'
   return `${used ?? '—'} GB of ${total ?? '—'} GB`
@@ -88,6 +114,14 @@ export default function AssignmentDetailPage() {
   if (isError || !data) return <ErrorState error={error} onRetry={() => refetch()} />
   const a = data
 
+  // Find the latest RETURNED timeline entry to show the return record (delivery + return data).
+  const retEntry = tl.data?.items?.find((e) => e.eventType === 'RETURNED') ?? null
+  const retState: ReturnStateData | null = retEntry?.snapshot
+    ? ((retEntry.snapshot as Record<string, unknown>).returnState as ReturnStateData)
+    : null
+
+  /** Safely convert an unknown value to a display string. */
+
   return (
     <>
       <Link to="/assignments" className="mb-3 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ArrowLeft className="h-4 w-4" /> Assignments</Link>
@@ -155,6 +189,27 @@ export default function AssignmentDetailPage() {
                       {it.returnCondition && <span className="ml-2 text-xs text-slate-500">return {titleCase(it.returnCondition)}</span>}
                     </Row>
                   ))}
+                </dl>
+              </div>
+            )}
+            {a.status === 'RETURNED' && retState && (
+              <div className="card p-5">
+                <h2 className="mb-1 text-sm font-semibold text-slate-900">Return record</h2>
+                <dl className="divide-y divide-slate-100 text-sm">
+                  <Row label="Condition">{titleCase(String((retState?.condition as string) ?? ''))}</Row>
+                  <Row label="Chats 1 (normal)">{fmtVal(retState?.wa1ChatNormalCount)}</Row>
+                  <Row label="Chats 1 (archived)">{fmtVal(retState?.wa1ChatArchivedCount)}</Row>
+                  <Row label="Backup date 1">{retState?.wa1BackupDate ? fmtDate(retState.wa1BackupDate) : '—'}</Row>
+                  <Row label="Backup size 1">{fmtVal(retState?.wa1BackupUsedGB)} GB of {fmtVal(retState?.wa1BackupTotalGB)} GB</Row>
+                  <Row label="Chats 2 (normal)">{fmtVal(retState?.wa2ChatNormalCount)}</Row>
+                  <Row label="Chats 2 (archived)">{fmtVal(retState?.wa2ChatArchivedCount)}</Row>
+                  <Row label="Backup date 2">{retState?.wa2BackupDate ? fmtDate(retState.wa2BackupDate) : '—'}</Row>
+                  <Row label="Backup size 2">{fmtVal(retState?.wa2BackupUsedGB)} GB of {fmtVal(retState?.wa2BackupTotalGB)} GB</Row>
+                  <Row label="SIM 1">{fmtVal(retState?.sim1Number)}</Row>
+                  <Row label="SIM 2">{fmtVal(retState?.sim2Number)}</Row>
+                  <Row label="Bitrix">{fmtVal(retState?.bitrixAccountId)}</Row>
+                  <Row label="Charger cable">{fmtVal(retState?.chargerCableAssetId)}</Row>
+                  <Row label="Charger adapter">{fmtVal(retState?.chargerAdapterAssetId)}</Row>
                 </dl>
               </div>
             )}

@@ -219,7 +219,7 @@ export interface Assignment {
   status: string
   employee?: { id: string; fullName: string } | null
   workIdentity?: { id: string; name: string } | null
-  asset?: { id: string; code: string; name: string } | null
+  asset?: { id: string; code: string; name: string; phone?: { make: string | null; model: string | null } | null } | null
   assignedAt?: string | null
   expectedReturnAt?: string | null
   returnedAt?: string | null

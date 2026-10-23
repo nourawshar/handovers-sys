@@ -224,6 +224,7 @@ async function applyReturn(assignment, { returnCondition, returnNotes, returnSta
     returnCondition,
     returnNotes: returnNotes ?? null,
     out,
+    returnState: returnState ?? null,
     comparison,
     photos: photoSets(assignment), // BE-1: handover vs return images for the timeline comparison
   };
