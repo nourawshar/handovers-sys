@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Controller, useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Camera, Loader2, X } from 'lucide-react'
 import { useAsset, useCategories, useCategoryFields, useRooms, useSaveAsset } from '@/api/hooks'
+import { api } from '@/api/client'
 import { CONDITIONS, type CategoryField } from '@/api/types'
 import { titleCase } from '@/lib/utils'
 import { Button, ErrorState, Field, Input, PageHeader, Select, Spinner, Textarea } from '@/components/ui'
@@ -12,6 +13,8 @@ import { baseAssetSchema, buildCustomSchema, customToForm, customToPayload, IMEI
 
 type FormValues = z.infer<typeof baseAssetSchema> & { custom: Record<string, unknown> }
 
+const ACCEPT = 'image/jpeg,image/png,image/webp'
+const MAX_MB = 5
 const EMPTY_PHONE = { imei: '', make: '', model: '', color: '', storage: '' }
 const EMPTY: FormValues = {
   name: '', categoryId: '', serialNumber: '', qty: '1', condition: 'GOOD', roomId: '', notes: '', phone: EMPTY_PHONE, custom: {},
@@ -119,11 +122,9 @@ export default function AssetFormPage() {
     reset({
       name: a.name, categoryId: a.categoryId, serialNumber: a.serialNumber ?? '',
       phone: {
-        imei: a.phone?.imei ?? '', make: a.phone?.make ?? '', model: a.phone?.model ?? '',
-        color: a.phone?.color ?? '', storage: a.phone?.storage ?? '',
+        imei: a.phone?.imei ?? '', make: a.phone?.make ?? '', model: a.phone?.model ?? '', color: a.phone?.color ?? '', storage: a.phone?.storage ?? '',
       },
-      qty: String(a.qty), condition: a.condition, roomId: a.roomId ?? '', notes: a.notes ?? '',
-      custom: customToForm(fieldsQ.data, a.customFields),
+      qty: String(a.qty), condition: a.condition, roomId: a.roomId ?? '', notes: a.notes ?? '', custom: customToForm(fieldsQ.data, a.customFields),
     })
   }, [editing, existing.data, fieldsQ.data, fieldsQ.isFetching, categoryId, reset])
 
@@ -138,6 +139,53 @@ export default function AssetFormPage() {
     if (editing || !fieldsQ.data) return
     setValue('custom', customToForm(fieldsQ.data), { shouldDirty: false })
   }, [editing, fieldsQ.data, setValue])
+
+  // --- Image upload for new assets -----------------------------------------
+  // Images can only be attached to a real record, so the flow is: save the asset
+  // first, then upload the picked files to the new asset (the same
+  // /assets/:id/photos endpoint the asset detail page uses). The user is only
+  // navigated to the detail page once all photos have landed.
+  const [files, setFiles] = useState<File[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const handleFiles = (list: FileList | null) => {
+    if (!list) return
+    const picked = Array.from(list)
+    if (!picked.length) return
+    const bad = picked.find((f) => !ACCEPT.split(',').includes(f.type))
+    if (bad) {
+      setUploadError(`"${bad.name}" is not a JPEG, PNG or WebP image.`)
+      return
+    }
+    const big = picked.find((f) => f.size > MAX_MB * 1024 * 1024)
+    if (big) {
+      setUploadError(`"${big.name}" is larger than ${MAX_MB} MB.`)
+      return
+    }
+    setUploadError(null)
+    setFiles((prev) => [...prev, ...picked])
+  }
+
+  const makePhotoForm = (fileList: File[], type: string): FormData => {
+    const form = new FormData()
+    form.append('type', type)
+    fileList.forEach((f) => form.append('photos', f))
+    return form
+  }
+
+  const uploadPhotosToAsset = async (assetId: string, fileList: File[]): Promise<void> => {
+    const CHUNK = 10 // server multer limit is 10 files per request
+    for (let i = 0; i < fileList.length; i += CHUNK) {
+      const chunk = fileList.slice(i, i + CHUNK)
+      await api.upload<Record<string, unknown>>(`/assets/${assetId}/photos`, makePhotoForm(chunk, 'GENERAL'))
+    }
+  }
 
   const onSubmit = handleSubmit(async (v) => {
     const blank = (s: string) => s.trim() || null
@@ -155,7 +203,7 @@ export default function AssetFormPage() {
       : isSim
         ? `SIM ${String(v.custom.phone_number ?? '').trim() || 'card'}`
         : v.name.trim()
-    const a = await save.mutateAsync({
+    const asset = await save.mutateAsync({
       name,
       // The server allows re-categorising via PATCH, but this UI locks the category once created.
       ...(editing ? {} : { categoryId: v.categoryId }),
@@ -168,8 +216,21 @@ export default function AssetFormPage() {
       customFields: customToPayload(fields, v.custom),
       ...(phone && { phone }),
     })
-    nav(`/assets/${a.id || id}`)
+    setUploading(true)
+    try {
+      await uploadPhotosToAsset(asset.id, files)
+      setFiles([])
+      nav(`/assets/${asset.id}`)
+    } catch (err) {
+      // Leave the saved asset in place (it still exists and can be completed from its detail
+      // page) and surface the error clearly instead of deleting it.
+      setUploadError((err as Error).message ?? 'Unable to attach the selected photos.')
+    } finally {
+      setUploading(false)
+    }
   })
+  // --------------------------------------------------------------------------
+
   if (editing && existing.isLoading) return <Spinner />
   if (editing && existing.isError) return <ErrorState error={existing.error} onRetry={() => existing.refetch()} />
 
@@ -220,6 +281,7 @@ export default function AssetFormPage() {
                   <Select {...register('roomId')}>
                     <option value="">— None —</option>
                     {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
+                    <option value="IT">IT</option>
                   </Select>
                 </Field>
                 <Field label="Notes" className="sm:col-span-2" error={errors.notes?.message}>
@@ -229,6 +291,61 @@ export default function AssetFormPage() {
             )}
           </div>
         </section>
+
+        {!editing && (
+          <section className="card p-5">
+            <h2 className="mb-1 text-sm font-semibold text-slate-900">Photos</h2>
+            {uploading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <Loader2 className="h-4 w-4 animate-spin" /> Uploading images&hellip;
+              </div>
+            ) : files.length > 0 ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-3">
+                  {files.map((f, i) => (
+                    <div
+                      key={i}
+                      className="relative h-16 w-16 overflow-hidden rounded-lg border border-slate-200"
+                    >
+                      <img
+                        src={URL.createObjectURL(f)}
+                        alt={f.name}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeFile(i)}
+                        className="absolute right-0.5 bottom-0.5 rounded-sm p-0.5 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        aria-label={`Remove ${f.name}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500">
+                  {files.length} photo{files.length > 1 ? 's' : ''} selected. They&rsquo;ll be
+                  attached to this asset when you save.
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ACCEPT}
+                  multiple
+                  className="hidden"
+                  onChange={(e) => handleFiles(e.target.files)}
+                />
+                <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()}>
+                  <Camera className="h-4 w-4" /> Add photos
+                </Button>
+              </div>
+            )}
+            {uploadError && <div className="mt-2 text-xs text-red-600">{uploadError}</div>}
+          </section>
+        )}
 
         {isPhone && (
           <section className="card p-5">
