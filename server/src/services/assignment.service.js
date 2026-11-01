@@ -415,8 +415,9 @@ async function createPhoneAssignment(body, userId) {
       if (item.assetId === phoneAssetId) continue;
       await tx.assignmentTimelineEntry.create({
         data: {
-          assignmentId: assignment.id,
+          assignment: { connect: { id: assignment.id } },
           assetId: item.assetId,
+          employeeId,
           eventType: 'ASSIGNED',
           snapshot,
           createdById: userId,
@@ -499,7 +500,7 @@ async function createGenericAssignment(body, userId) {
     const snapshot = buildSnapshot(assignment, null, items);
     await tx.assignmentTimelineEntry.create({
       data: {
-        assignmentId: assignment.id,
+        assignment: { connect: { id: assignment.id } },
         assetId,
         employeeId,
         workIdentityId: wid ?? null,
@@ -514,8 +515,9 @@ async function createGenericAssignment(body, userId) {
       if (item.assetId === assetId) continue;
       await tx.assignmentTimelineEntry.create({
         data: {
-          assignmentId: assignment.id,
+          assignment: { connect: { id: assignment.id } },
           assetId: item.assetId,
+          employeeId,
           eventType: 'ASSIGNED',
           snapshot,
           createdById: userId,
