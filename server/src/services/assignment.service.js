@@ -248,7 +248,7 @@ async function createPhoneAssignment(body, userId) {
     if (waIds.length) {
       for (const wa of waIds) {
         const account = await tx.account.findFirst({
-          where: { kind: wa.type === 'wa1' ? 'WA1' : 'WA2', identifier: wa.number, isWhatsApp: true },
+          where: { kind: wa.type === 'wa1' ? 'WHATSAPP' : 'WHATSAPP', identifier: wa.number, isWhatsApp: true },
         });
         if (account) {
           await tx.account.update({ where: { id: account.id }, data: { currentAssignmentId: assignment.id } });
