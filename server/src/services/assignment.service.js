@@ -416,7 +416,7 @@ async function createPhoneAssignment(body, userId) {
       await tx.assignmentTimelineEntry.create({
         data: {
           assignment: { connect: { id: assignment.id } },
-          assetId: item.assetId,
+          asset: { connect: { id: item.assetId } },
           employeeId,
           eventType: 'ASSIGNED',
           snapshot,
@@ -516,7 +516,7 @@ async function createGenericAssignment(body, userId) {
       await tx.assignmentTimelineEntry.create({
         data: {
           assignment: { connect: { id: assignment.id } },
-          assetId: item.assetId,
+          asset: { connect: { id: item.assetId } },
           employeeId,
           eventType: 'ASSIGNED',
           snapshot,
