@@ -417,7 +417,7 @@ async function createPhoneAssignment(body, userId) {
         data: {
           assignment: { connect: { id: assignment.id } },
           asset: { connect: { id: item.assetId } },
-          employeeId,
+          employee: { connect: { id: assignment.employeeId } },
           eventType: 'ASSIGNED',
           snapshot,
           createdById: userId,
@@ -517,7 +517,7 @@ async function createGenericAssignment(body, userId) {
         data: {
           assignment: { connect: { id: assignment.id } },
           asset: { connect: { id: item.assetId } },
-          employeeId,
+          employee: { connect: { id: assignment.employeeId } },
           eventType: 'ASSIGNED',
           snapshot,
           createdById: userId,
