@@ -67,7 +67,11 @@ const detailInclude = {
   employee: { select: { id: true, fullName: true } },
   workIdentity: { select: { id: true, name: true, roomId: true } },
   asset: { select: { id: true, code: true, name: true } },
-  items: { include: { asset: { select: { id: true, code: true, name: true } } } },
+  items: {
+    include: {
+      asset: { select: { id: true, code: true, name: true } },
+    },
+  },
   phoneDetail: {
     include: {
       bitrixAccount: { select: { id: true, identifier: true, email: true } },
@@ -77,6 +81,49 @@ const detailInclude = {
   },
   photos: { orderBy: { createdAt: 'asc' }, select: { id: true, type: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true } },
   timelineEntries: { orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, eventType: true, snapshot: true, createdAt: true, createdBy: { select: { id: true, fullName: true } } } },
+  // Return records with their discrepancy fields (BE-2): the discrepancy is surfaced
+  // here — the comparison that the return flow produced — alongside the assignment view.
+  returnRecords: {
+    orderBy: { returnedAt: 'desc' },
+    include: {
+      comparisonFields: {
+        where: { isDiscrepancy: true },
+        select: { fieldKey: true, label: true, valueAtHandover: true, valueAtReturn: true, severity: true, isDiscrepancy: true },
+      },
+    },
+  },
+};
+
+/** Phone-detail include: items carry conditionAtHandover + returnCondition (drawer needs them). */
+const phoneDetailInclude = {
+  employee: { select: { id: true, fullName: true } },
+  workIdentity: { select: { id: true, name: true, roomId: true } },
+  asset: { select: { id: true, code: true, name: true } },
+  items: {
+    select: {
+      asset: { select: { id: true, code: true, name: true } },
+      conditionAtHandover: true,
+      returnCondition: true,
+    },
+  },
+  phoneDetail: {
+    include: {
+      bitrixAccount: { select: { id: true, identifier: true, email: true } },
+      chargerCableAsset: { select: { id: true, code: true, name: true } },
+      chargerAdapterAsset: { select: { id: true, code: true, name: true } },
+    },
+  },
+  photos: { orderBy: { createdAt: 'asc' }, select: { id: true, type: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true } },
+  timelineEntries: { orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, eventType: true, snapshot: true, createdAt: true, createdBy: { select: { id: true, fullName: true } } } },
+  returnRecords: {
+    orderBy: { returnedAt: 'desc' },
+    include: {
+      comparisonFields: {
+        where: { isDiscrepancy: true },
+        select: { fieldKey: true, label: true, valueAtHandover: true, valueAtReturn: true, severity: true, isDiscrepancy: true },
+      },
+    },
+  },
 };
 
 const listQuery = z.object({
@@ -143,7 +190,7 @@ router.get(
   read,
   validate({ params: idParams }),
   asyncHandler(async (req, res) => {
-    const assignment = await loadScoped(req.params.id, req, detailInclude);
+    const assignment = await loadScoped(req.params.id, req, phoneDetailInclude);
     res.json({
       data: {
         ...assignment,

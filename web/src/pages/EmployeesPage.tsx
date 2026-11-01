@@ -168,16 +168,17 @@ export default function EmployeesPage() {
   const [roomId, setRoomId] = useState('')
   const [departmentTeamId, setDept] = useState('')
   const [page, setPage] = useState(1)
+  const [sort, setSort] = useState<'name' | 'lastAdded'>('name')
   const [open, setOpen] = useState<Set<string>>(new Set())
   const [openAsset, setOpenAsset] = useState<string | null>(null)
   const [form, setForm] = useState<{ open: boolean; editing: Employee | null }>({ open: false, editing: null })
   const [deleteResult, setDeleteResult] = useState<{ kind: 'info' | 'warn'; text: string } | null>(null)
   const dq = useDebounce(q)
-  useEffect(() => setPage(1), [dq, roomId, departmentTeamId])
+  useEffect(() => setPage(1), [dq, roomId, departmentTeamId, sort])
 
   // Team leaders are scoped server-side (their room only); we hide the room filter for them.
   const leader = user?.role === 'TEAM_LEADER'
-  const list = useEmployees({ q: dq || undefined, roomId: (!leader && roomId) || undefined, departmentTeamId: departmentTeamId || undefined, page, pageSize: 25 })
+  const list = useEmployees({ q: dq || undefined, roomId: (!leader && roomId) || undefined, departmentTeamId: departmentTeamId || undefined, page, pageSize: 25, sort })
 
   return (
     <>
@@ -207,6 +208,15 @@ export default function EmployeesPage() {
           <option value="">All teams</option>
           {depts.data?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
         </Select>
+      </div>
+      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-slate-600">Sort</span>
+          <Select value={sort} onChange={(e) => setSort(e.target.value as 'name' | 'lastAdded')} aria-label="Sort employees">
+            <option value="name">Name (A–Z)</option>
+            <option value="lastAdded">Last added</option>
+          </Select>
+        </div>
       </div>
       <div className="card overflow-hidden">
         {list.isLoading ? <Spinner /> : list.isError ? <div className="p-4"><ErrorState error={list.error} onRetry={() => list.refetch()} /></div> : !list.data?.items.length ? (

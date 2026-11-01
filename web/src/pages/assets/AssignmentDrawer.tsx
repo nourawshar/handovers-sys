@@ -44,8 +44,8 @@ function PhoneDetailPanel({ pd }: { pd: PhoneAssignmentDetail }) {
           </>
         )}
         <Row label="Bitrix account">{pd.bitrixAccountId && <span className="font-mono">{pd.bitrixAccountId}</span>}</Row>
-        <Row label="Charger cable">{pd.chargerCableAssetId && <span className="font-mono">{pd.chargerCableAssetId}</span>}</Row>
-        <Row label="Charger adapter">{pd.chargerAdapterAssetId && <span className="font-mono">{pd.chargerAdapterAssetId}</span>}</Row>
+        <Row label="Charger cable">{pd.chargerCableAsset ? <span className="font-mono">{pd.chargerCableAsset.code} · {pd.chargerCableAsset.name}</span> : pd.chargerCableAssetId && <span className="font-mono">{pd.chargerCableAssetId}</span>}</Row>
+        <Row label="Charger adapter">{pd.chargerAdapterAsset ? <span className="font-mono">{pd.chargerAdapterAsset.code} · {pd.chargerAdapterAsset.name}</span> : pd.chargerAdapterAssetId && <span className="font-mono">{pd.chargerAdapterAssetId}</span>}</Row>
       </dl>
     </div>
   )

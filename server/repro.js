@@ -1,0 +1,21 @@
+require('dotenv').config();
+(async () => {
+  const { execFileSync } = require('node:child_process');
+  const path = require('node:path');
+  execFileSync('node', [path.join(__dirname, 'scripts', 'fixture-return.cjs')], { cwd: __dirname, stdio: 'pipe' });
+  const cls = require('./src/db');
+  const a = await cls.assignment.findUnique({ where: { assignmentCode: 'A-900001' } });
+  console.log('ASSIGN', a.assignmentCode, a.id);
+  const lr = await fetch('http://localhost:4000/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'Admin#12345' }) });
+  console.log('LOGIN', lr.status, await lr.text());
+  const cookies = lr.headers.getSetCookie?.().join('; ');
+  const cr = await fetch('http://localhost:4000/api/v1/assignments/' + a.id + '/return', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookies }, body: JSON.stringify({ returnCondition: 'FAIR', returnNotes: 'Charger cable missing', return: { wa1ChatNormalCount: 5120, bitrixAccountId: null, chargerCableAssetId: null } }) });
+  console.log('RETURN', cr.status, await cr.text());
+  const tl = await fetch('http://localhost:4000/api/v1/assignments/' + a.id + '/timeline?pageSize=20', { headers: { Cookie: cookies } });
+  console.log('TL', tl.status, (await tl.json()).data.map(e => e.eventType).join(','));
+  const phone = await cls.asset.findUnique({ where: { code: 'PHN-000001' }, select: { status: true } });
+  const cable = await cls.asset.findUnique({ where: { code: 'CBL-000001' }, select: { status: true } });
+  const adapter = await cls.asset.findUnique({ where: { code: 'ADP-000001' }, select: { status: true } });
+  console.log('STATUS phone:', phone.status, 'cable:', cable.status, 'adapter:', adapter.status);
+  await cls.$disconnect();
+})().catch(e => { console.error('ERR', e); process.exit(1); });

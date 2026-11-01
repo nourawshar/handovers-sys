@@ -34,6 +34,11 @@ export function WorkIdentityFields({ value, onChange, errors, className }: {
     [rooms.data],
   )
 
+  // Prefer real backend "IT" records over the hardcoded fallback, so a duplicate "IT"
+  // option is not shown when the backend already has one.
+  const hasItDepartment = (departments.data ?? []).some((d) => d.name === 'IT')
+  const hasItRoom = (callCenterRooms ?? []).some((r) => r.code === 'IT')
+
   const setDepartment = (departmentTeamId: string) => {
     const dept = departments.data?.find((d) => d.id === departmentTeamId)
     const patch: Partial<WorkIdentityValue> = { departmentTeamId }
@@ -56,7 +61,10 @@ export function WorkIdentityFields({ value, onChange, errors, className }: {
       )}
       <Field label="Department" required error={errors.departmentTeamId}>
         <SearchableSelect
-          options={(departments.data ?? []).map((d) => ({ value: d.id, label: d.name }))}
+          options={[
+            ...((departments.data ?? [])).map((d) => ({ value: d.id, label: d.name })),
+            ...(hasItDepartment ? [] : [{ value: 'IT', label: 'IT' }]),
+          ]}
           value={value.departmentTeamId}
           onChange={setDepartment}
           placeholder="Type to filter departments…"
@@ -66,7 +74,10 @@ export function WorkIdentityFields({ value, onChange, errors, className }: {
       {isCallCenter && (
         <Field label="Room" hint="Call-center seats require a room" required error={errors.roomId}>
           <SearchableSelect
-            options={callCenterRooms.map((r) => ({ value: r.id, label: r.code }))}
+            options={[
+              ...callCenterRooms.map((r) => ({ value: r.id, label: r.code })),
+              ...(hasItRoom ? [] : [{ value: 'IT', label: 'IT' }]),
+            ]}
             value={value.roomId}
             onChange={(roomId) => onChange({ roomId })}
             placeholder="Type to filter rooms…"

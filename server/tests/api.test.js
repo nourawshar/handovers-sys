@@ -625,3 +625,60 @@ test('phase5: generic assignment + work-identity upsert idempotency + account-by
 
     await prisma.$disconnect();
   });
+
+test('BE-19: return without required charger cable/adapter - items tracked, inventory not released, discrepancy visible in detail', async () => {
+  const { execFileSync } = require('node:child_process');
+  const path = require('node:path');
+  execFileSync('node', [path.join(__dirname, '..', 'scripts', 'fixture-return.cjs')], { cwd: path.join(__dirname, '..'), stdio: 'pipe' });
+  const prisma = require('../src/db');
+  const assignment = await prisma.assignment.findUnique({ where: { assignmentCode: 'A-900001' } });
+  const id = assignment.id;
+  const admin = await as('admin');
+
+  // 1) return-form pre-fills out-state: charger cable/adapter present at handover
+  const form = await admin.req('GET', `/assignments/${id}/return-form`);
+  assert.equal(form.status, 200);
+  assert.equal(form.body.data.out.chargerCableAssetId, 'CBL-000001 — USB-C charger cable');
+  assert.equal(form.body.data.out.chargerAdapterAssetId, 'ADP-000001 — 15W USB adapter');
+
+  // 2) submit return WITHOUT the charger cable and adapter -> two CRITICAL discrepancies
+  const ret = await admin.req('POST', `/assignments/${id}/return`, {
+    body: { returnCondition: 'FAIR', returnNotes: 'Charger cable and adapter missing', return: { chargerCableAssetId: null, chargerAdapterAssetId: null } },
+  });
+  assert.equal(ret.status, 200);
+  assert.equal(ret.body.data.status, 'RETURNED');
+  assert.equal(ret.body.data.hasDiscrepancies, true);
+  const crit = ret.body.data.discrepancies.filter((c) => c.isDiscrepancy && c.severity === 'CRITICAL').map((c) => c.fieldKey);
+  assert.ok(crit.includes('chargerCableAssetId') && crit.includes('chargerAdapterAssetId'));
+
+  // 3) timeline shows ASSIGNED -> RETURNED (+ DISCREPANCY)
+  const tl = (await admin.req('GET', `/assignments/${id}/timeline?pageSize=20`)).body.data;
+  const types = tl.map((e) => e.eventType);
+  assert.ok(types.includes('ASSIGNED') && types.includes('RETURNED') && types.includes('DISCREPANCY'));
+
+  // 4) double-return -> 409
+  assert.equal((await admin.req('POST', `/assignments/${id}/return`, { body: { returnCondition: 'GOOD', return: {} } })).status, 409);
+
+  // 5) inventory: primary released, but the MISSING required charger items stay ASSIGNED (not returned to inventory)
+  const phone = await prisma.asset.findUnique({ where: { code: 'PHN-000001' }, select: { status: true, currentHolderEmployeeId: true, roomId: true } });
+  assert.equal(phone.status, 'AVAILABLE');
+  assert.equal(phone.currentHolderEmployeeId, null);
+  assert.equal(phone.roomId, null);
+  const cable = await prisma.asset.findUnique({ where: { code: 'CBL-000001' }, select: { status: true } });
+  const adapter = await prisma.asset.findUnique({ where: { code: 'ADP-000001' }, select: { status: true } });
+  assert.equal(cable.status, 'ASSIGNED', 'missing charger cable must NOT be released to AVAILABLE');
+  assert.equal(adapter.status, 'ASSIGNED', 'missing charger adapter must NOT be released to AVAILABLE');
+
+  // 6) discrepancy visible in assignment detail (returnRecords + comparisonFields)
+  const detail = (await admin.req('GET', `/assignments/${id}`)).body.data;
+  assert.ok(detail.returnRecords && detail.returnRecords.length > 0, 'returnRecords present');
+  const discFields = detail.returnRecords.flatMap((r) => r.comparisonFields ?? []);
+  assert.ok(discFields.some((f) => f.fieldKey === 'chargerCableAssetId'), 'chargerCableAssetId discrepancy visible');
+  assert.ok(discFields.some((f) => f.fieldKey === 'chargerAdapterAssetId'), 'chargerAdapterAssetId discrepancy visible');
+
+  // Bitrix account released
+  const bitrix = await prisma.account.findFirst({ where: { identifier: 'sofia@clinic.bitrix24.com' }, select: { currentAssignmentId: true } });
+  assert.equal(bitrix.currentAssignmentId, null);
+
+  await prisma.$disconnect();
+});

@@ -238,7 +238,7 @@ async function activate(tx, assignmentId, opts) {
     await tx.account.updateMany({ where: { id: { in: accountIds } }, data: { currentAssignmentId: assignmentId } });
   }
 
-  // Write the ASSIGNED handover snapshot timeline entry.
+  // Handover snapshot timeline entry (primary asset).
   const snapshot = buildSnapshot(updated, phoneDetail, items);
   await tx.assignmentTimelineEntry.create({
     data: {
@@ -251,6 +251,20 @@ async function activate(tx, assignmentId, opts) {
       createdById: updated.createdById,
     },
   });
+
+  // Per-item timeline entries (BE-19): every non-primary item gets its own entry.
+  for (const item of items) {
+    if (item.assetId === assignment.assetId) continue;
+    await tx.assignmentTimelineEntry.create({
+      data: {
+        assignmentId,
+        assetId: item.assetId,
+        eventType: 'ASSIGNED',
+        snapshot,
+        createdById: updated.createdById,
+      },
+    });
+  }
 
   return { assignment: updated, snapshot };
 }
@@ -382,7 +396,7 @@ async function createPhoneAssignment(body, userId) {
       await tx.account.updateMany({ where: { id: { in: accountIds } }, data: { currentAssignmentId: assignment.id } });
     }
 
-    // Handover snapshot timeline entry.
+    // Handover snapshot timeline entry (primary asset).
     const snapshot = buildSnapshot(assignment, phoneDetail, items);
     await tx.assignmentTimelineEntry.create({
       data: {
@@ -395,6 +409,20 @@ async function createPhoneAssignment(body, userId) {
         createdById: userId,
       },
     });
+
+    // Per-item timeline entries (BE-19): every non-primary item gets its own entry.
+    for (const item of items) {
+      if (item.assetId === phoneAssetId) continue;
+      await tx.assignmentTimelineEntry.create({
+        data: {
+          assignmentId: assignment.id,
+          assetId: item.assetId,
+          eventType: 'ASSIGNED',
+          snapshot,
+          createdById: userId,
+        },
+      });
+    }
 
     return { assignment, phoneDetail, items, snapshot };
   });
@@ -480,6 +508,20 @@ async function createGenericAssignment(body, userId) {
         createdById: userId,
       },
     });
+
+    // Per-item timeline entries (BE-19): every bundled (accessory) item gets its own entry.
+    for (const item of items) {
+      if (item.assetId === assetId) continue;
+      await tx.assignmentTimelineEntry.create({
+        data: {
+          assignmentId: assignment.id,
+          assetId: item.assetId,
+          eventType: 'ASSIGNED',
+          snapshot,
+          createdById: userId,
+        },
+      });
+    }
 
     return { assignment, items, snapshot };
   });

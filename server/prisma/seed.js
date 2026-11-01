@@ -45,12 +45,15 @@ async function main() {
     dept[name] = await prisma.departmentTeam.upsert({ where: { name }, create: { name, type: 'HOSPITAL', sortOrder: (order += 10) }, update: { type: 'HOSPITAL' } });
   }
   dept['Call Center'] = await prisma.departmentTeam.upsert({ where: { name: 'Call Center' }, create: { name: 'Call Center', type: 'CALLCENTER', sortOrder: 0 }, update: {} });
+  dept['IT'] = await prisma.departmentTeam.upsert({ where: { name: 'IT' }, create: { name: 'IT', type: 'CALLCENTER', sortOrder: 0 }, update: { type: 'CALLCENTER' } });
 
   // ── Rooms TR1–TR4 ──
   const rooms = {};
   for (const code of ['TR1', 'TR2', 'TR3', 'TR4']) {
     rooms[code] = await prisma.room.upsert({ where: { code }, create: { code, teamType: 'CALLCENTER' }, update: {} });
   }
+  // IT room (asset "Location / room" dropdown): CALLCENTER so the asset form accepts it.
+  rooms['IT'] = await prisma.room.upsert({ where: { code: 'IT' }, create: { code: 'IT', teamType: 'CALLCENTER' }, update: {} });
 
   // ── Users ──
     // CHANGE 7 / BE-17: real people mapped to roles. TEAM_LEADER rows carry scope 'OWN_ROOM';

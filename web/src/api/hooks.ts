@@ -229,7 +229,7 @@ export function useDeleteAccount(id: string) {
 }
 
 /* ---------- People & places ---------- */
-export function useEmployees(filters: { q?: string; roomId?: string; departmentTeamId?: string; page?: number; pageSize?: number }) {
+export function useEmployees(filters: { q?: string; roomId?: string; departmentTeamId?: string; page?: number; pageSize?: number; sort?: 'name' | 'lastAdded' }) {
   return useQuery({
     queryKey: ['employees', filters],
     placeholderData: keepPreviousData,

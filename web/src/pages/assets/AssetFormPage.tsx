@@ -75,6 +75,8 @@ export default function AssetFormPage() {
   const categories = useCategories()
   const rooms = useRooms()
   const save = useSaveAsset(id)
+  // Prefer real backend "IT" room over the hardcoded fallback (avoid a duplicate "IT" option).
+  const hasItRoom = (rooms.data ?? []).some((r) => r.code === 'IT')
 
   // Fields / phone-ness / sim-ness are read through refs so the resolver always validates against the current category.
   const fieldsRef = useRef<CategoryField[]>([])
@@ -281,7 +283,7 @@ export default function AssetFormPage() {
                   <Select {...register('roomId')}>
                     <option value="">— None —</option>
                     {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
-                    <option value="IT">IT</option>
+                    {hasItRoom ? null : <option value="IT">IT</option>}
                   </Select>
                 </Field>
                 <Field label="Notes" className="sm:col-span-2" error={errors.notes?.message}>

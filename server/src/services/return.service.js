@@ -189,19 +189,6 @@ async function loadAssignment(id) {
 }
 
 /**
- * Resolve the set of asset ids genuinely tied to this assignment (primary phone + SIMs +
- * charger cable/adapter from items, plus the optional phoneDetail charger refs as a safety net).
- */
-function involvedAssetIds(assignment) {
-  const ids = new Set((assignment.items ?? []).map((i) => i.assetId));
-  const pd = assignment.phoneDetail ?? {};
-  for (const k of ['sim1AssetId', 'sim2AssetId', 'chargerCableAssetId', 'chargerAdapterAssetId']) {
-    if (pd[k]) ids.add(pd[k]);
-  }
-  return [...ids];
-}
-
-/**
  * Execute the return close-out in one transaction (contract §8.2):
  *  - ReturnRecord + ReturnComparisonField rows
  *  - flip assignment items inactive + set returnCondition
@@ -214,7 +201,6 @@ async function applyReturn(assignment, { returnCondition, returnNotes, returnSta
   const out = buildOutSnapshot(assignment);
   const comparison = compare(out, returnState);
   const hasDiscrepancies = comparison.some((c) => c.isDiscrepancy);
-  const assetIds = involvedAssetIds(assignment);
   const conditionField = comparison.find((c) => c.fieldKey === 'condition');
 
   const snapshot = {
@@ -226,8 +212,12 @@ async function applyReturn(assignment, { returnCondition, returnNotes, returnSta
     out,
     returnState: returnState ?? null,
     comparison,
-    photos: photoSets(assignment), // BE-1: handover vs return images for the timeline comparison
+    photos: photoSets(assignment),
+    returnItems: [],
   };
+
+  // Resolve which items were returned, with their conditions and return states
+  const returnItems = resolveReturnItems(returnState, assignment);
 
   return prisma.$transaction(async (tx) => {
     const record = await tx.returnRecord.create({
@@ -252,19 +242,72 @@ async function applyReturn(assignment, { returnCondition, returnNotes, returnSta
       })),
     });
 
-    await tx.assignmentItem.updateMany({ where: { assignmentId: assignment.id }, data: { isActive: false, ...(returnCondition ? { returnCondition } : {}) } });
+    // Mark every returned item inactive (returnCondition only on the PRIMARY item so it
+    // is not duplicated onto SIM/charger items that have no meaningful condition).
+    for (const [, item] of returnItems) {
+      const data = { isActive: false };
+      if (item.role === 'PRIMARY' && item.condition) {
+        data.returnCondition = item.condition;
+      }
+      await tx.assignmentItem.updateMany({
+        where: { assignmentId: assignment.id, assetId: item.assetId },
+        data,
+      });
+    }
+
     if (returnCondition) {
-      // Bring the condition value into the item + mirror into the PRIMARY item for the detail UI.
+      // Bring the condition into the primary item
       await tx.assignmentItem.updateMany({
         where: { assignmentId: assignment.id, role: 'PRIMARY' },
         data: { returnCondition },
       });
     }
 
+    // Update assignment status
     await tx.assignment.update({ where: { id: assignment.id }, data: { status: 'RETURNED', returnedAt: new Date() } });
 
-    if (assetIds.length) {
-      await tx.asset.updateMany({ where: { id: { in: assetIds }, status: 'ASSIGNED' }, data: { status: 'AVAILABLE', currentHolderEmployeeId: null, roomId: null } });
+    // Release only the assets that were actually returned. Required items that are
+    // missing at return (e.g. charger cable/adapter) stay ASSIGNED so they stay blocked
+    // from reuse until found or formally disposed of.
+    const released = assetsReturned(assignment, returnState);
+    if (released.length) {
+      await tx.asset.updateMany({
+        where: { id: { in: released }, status: 'ASSIGNED' },
+        data: { status: 'AVAILABLE', currentHolderEmployeeId: null, roomId: null },
+      });
+    }
+
+    // Create per-item timeline entries
+    for (const [, item] of returnItems) {
+      const itemSnapshot = {
+        assignmentCode: assignment.assignmentCode,
+        type: assignment.type,
+        status: 'RETURNED',
+        returnedAt: new Date(),
+        returnCondition: item.condition,
+        returnState: item.returnState,
+        missing: item.missing,
+      };
+
+      await tx.assignmentTimelineEntry.create({
+        data: {
+          assignmentId: assignment.id,
+          assetId: item.assetId,
+          employeeId: assignment.employeeId,
+          workIdentityId: assignment.workIdentityId ?? null,
+          eventType: item.returnState === 'RETURNED' ? 'RETURNED' : 'NOTE',
+          snapshot: itemSnapshot,
+          createdById: user.id,
+        },
+      });
+
+      snapshot.returnItems.push({
+        assetId: item.assetId,
+        role: item.role,
+        returnCondition: item.condition,
+        returnState: item.returnState,
+        missing: item.missing,
+      });
     }
 
     // Account release: Bitrix + any WhatsApp-backup/Gmail account bound to this assignment.
@@ -284,11 +327,115 @@ async function applyReturn(assignment, { returnCondition, returnNotes, returnSta
       });
     }
 
-    return { hasDiscrepancies, comparison, conditionField, record };
+    return { hasDiscrepancies, comparison, conditionField, record, returnItems: snapshot.returnItems };
   });
 }
 
+/**
+ * Get items from returnState. The returnState can contain asset ids for charger cable/adapter keys.
+ * Returns a map of assetId => { role, condition, returnState, missing }.
+ */
+
+/** Resolve the set of assets that get released back to inventory on return: the primary
+ * asset always, plus any item whose at-return value is present (SIM numbers, charger
+ * cable/adapter asset ids). Required items that are missing at return stay assigned so
+ * they remain blocked from reuse until found or formally disposed of. */
+function assetsReturned(assignment, returnState) {
+  const pd = assignment.phoneDetail ?? {};
+  const released = new Set([assignment.assetId]);
+  for (const [fieldKey, assetIdKey] of [
+    ['sim1Number', 'sim1AssetId'],
+    ['sim2Number', 'sim2AssetId'],
+    ['chargerCableAssetId', 'chargerCableAssetId'],
+    ['chargerAdapterAssetId', 'chargerAdapterAssetId'],
+  ]) {
+    const value = returnState ? returnState[fieldKey] : undefined;
+    if (value != null && String(value) !== '') {
+      const id = pd[assetIdKey];
+      if (id) released.add(id);
+    }
+  }
+  return [...released];
+}
+
 /** Guard: an assignment must exist and be ACTIVE to return / pre-fill a return form. */
+/**
+ * Get items from returnState. The returnState can contain asset ids for charger cable/adapter keys.
+ * Returns a map of assetId => { role, condition, returnState, missing }.
+ */
+function resolveReturnItems(returnState, assignment) {
+  const items = new Map();
+  const pd = assignment.phoneDetail ?? {};
+
+  // A return-state value is "present" when it is non-empty. That is what marks an
+  // item as returned; absent/empty values mark required items as missing.
+  const present = (v) => v != null && String(v) !== '';
+
+  // First pass: every item the assignment carries.
+  for (const item of assignment.items ?? []) {
+    let value = null;
+    if (item.role === 'PRIMARY') value = returnState?.condition;
+    else if (item.role === 'SIM1') value = returnState?.sim1Number;
+    else if (item.role === 'SIM2') value = returnState?.sim2Number;
+    else if (item.role === 'CHARGER_CABLE') value = returnState?.chargerCableAssetId;
+    else if (item.role === 'CHARGER_ADAPTER') value = returnState?.chargerAdapterAssetId;
+
+    const returned = present(value);
+    items.set(item.assetId, {
+      role: item.role,
+      assetId: item.assetId,
+      condition: returned ? value : null,
+      returnState: returned ? 'RETURNED' : 'NOT_RETURNED',
+      missing: !returned,
+    });
+  }
+
+  // Second pass: charger/SIM records carried only on the phone record (safety net for
+  // items not present in `assignment.items`).
+  if (pd.chargerCableAssetId && !items.has(pd.chargerCableAssetId)) {
+    const returned = present(returnState?.chargerCableAssetId);
+    items.set(pd.chargerCableAssetId, {
+      role: 'CHARGER_CABLE',
+      assetId: pd.chargerCableAssetId,
+      condition: returned ? returnState?.chargerCableAssetId : null,
+      returnState: returned ? 'RETURNED' : 'NOT_RETURNED',
+      missing: !returned,
+    });
+  }
+  if (pd.chargerAdapterAssetId && !items.has(pd.chargerAdapterAssetId)) {
+    const returned = present(returnState?.chargerAdapterAssetId);
+    items.set(pd.chargerAdapterAssetId, {
+      role: 'CHARGER_ADAPTER',
+      assetId: pd.chargerAdapterAssetId,
+      condition: returned ? returnState?.chargerAdapterAssetId : null,
+      returnState: returned ? 'RETURNED' : 'NOT_RETURNED',
+      missing: !returned,
+    });
+  }
+  if (pd.sim1AssetId && !items.has(pd.sim1AssetId)) {
+    const returned = present(returnState?.sim1Number);
+    items.set(pd.sim1AssetId, {
+      role: 'SIM1',
+      assetId: pd.sim1AssetId,
+      condition: returned ? returnState?.sim1Number : null,
+      returnState: returned ? 'RETURNED' : 'NOT_RETURNED',
+      missing: !returned,
+    });
+  }
+  if (pd.sim2AssetId && !items.has(pd.sim2AssetId)) {
+    const returned = present(returnState?.sim2Number);
+    items.set(pd.sim2AssetId, {
+      role: 'SIM2',
+      assetId: pd.sim2AssetId,
+      condition: returned ? returnState?.sim2Number : null,
+      returnState: returned ? 'RETURNED' : 'NOT_RETURNED',
+      missing: !returned,
+    });
+  }
+
+  return items;
+}
+
 function assertReturnable(assignment) {
   if (!assignment) throw notFound('Assignment');
   if (assignment.status !== 'ACTIVE') throw conflict(`Assignment is not ACTIVE (status: ${assignment.status}) — only ACTIVE assignments can be returned`);

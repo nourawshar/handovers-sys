@@ -76,13 +76,18 @@ function scopeWhere(user, f) {
 router.get(
   '/',
   read,
-  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), roomId: z.uuid().optional(), departmentTeamId: z.uuid().optional() }) }),
+  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), roomId: z.uuid().optional(), departmentTeamId: z.uuid().optional(), sort: z.enum(['name', 'lastAdded']).optional() }) }),
   asyncHandler(async (req, res) => {
     const f = req.validQuery;
     const where = { ...scopeWhere(req.user, f), ...(f.departmentTeamId && { departmentTeamId: f.departmentTeamId }), ...(f.q && { fullName: { contains: f.q, mode: 'insensitive' } }) };
     const [total, data] = await Promise.all([
       prisma.employee.count({ where }),
-      prisma.employee.findMany({ where, orderBy: { fullName: 'asc' }, include: detailInclude, ...paginate(f) }),
+      prisma.employee.findMany({
+        where,
+        orderBy: f.sort === 'lastAdded' ? { createdAt: 'desc' } : { fullName: 'asc' },
+        include: detailInclude,
+        ...paginate(f),
+      }),
     ]);
     res.json({ data, meta: pageMeta(f, total) });
   }),
