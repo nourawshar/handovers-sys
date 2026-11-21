@@ -256,6 +256,7 @@ export const normAssignment = (a: R): Assignment => {
     workIdentity: a.workIdentity ?? (a.workIdentityId ? { id: a.workIdentityId, name: a.workIdentityName ?? '' } : null),
     asset,
     assignedAt: a.assignedAt, expectedReturnAt: a.expectedReturnAt, returnedAt: a.returnedAt,
+    itemCount: typeof a._count?.items === 'number' ? a._count.items : typeof a.itemCount === 'number' ? a.itemCount : null,
   }
 }
 
@@ -372,6 +373,10 @@ export function normReturnResult(raw: unknown): ReturnResult {
       handover: Array.isArray(ps?.handover) ? ps!.handover.map(mapPhoto) : [],
       return: Array.isArray(ps?.return) ? ps!.return.map(mapPhoto) : [],
     },
+    assetConditions: Array.isArray(x.assetConditions) ? x.assetConditions.map((c: R) => ({
+      assetId: String(c.assetId), code: c.code ?? '', name: c.name ?? '', role: c.role ?? '',
+      from: c.from ?? null, to: c.to ?? null, changed: !!c.changed, status: c.status ?? null,
+    })) : [],
   }
 }
 

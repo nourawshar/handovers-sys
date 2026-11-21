@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react'
+import { ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, Loader2, Search, X } from 'lucide-react'
 import { z } from 'zod'
+import { api } from '@/api/client'
 import { useAssets, useCategories, useCreateGenericAssignment, useDepartments, useEmployees, useRooms } from '@/api/hooks'
 import type { Category, GenericAssignmentPayload, WorkIdentityInput } from '@/api/types'
 import { CONDITIONS } from '@/api/types'
@@ -91,6 +92,70 @@ export function buildGenericPayload(draft: GenericDraft, isCallCenter: boolean):
     expectedReturnAt: draft.expectedReturnAt || null,
     notes: draft.notes || null,
   }
+}
+
+export type GenericPhotoType = 'FRONT' | 'BACK' | 'CONDITION'
+export interface GenericPhotoPick { type: GenericPhotoType; file: File; url: string }
+
+const PHOTO_ACCEPT = ['image/jpeg', 'image/png', 'image/webp']
+const PHOTO_MAX_MB = 5
+const PHOTO_SLOTS: { type: GenericPhotoType; label: string }[] = [
+  { type: 'FRONT', label: 'Front photo' }, { type: 'BACK', label: 'Back photo' }, { type: 'CONDITION', label: 'Condition photo' },
+]
+
+/** Front / back / condition photo slots (one image each). Files upload after the assignment is created. */
+function GenericPhotoPicker({ photos, setPhotos }: { photos: GenericPhotoPick[]; setPhotos: (p: GenericPhotoPick[]) => void }) {
+  const inputs = useRef<Partial<Record<GenericPhotoType, HTMLInputElement | null>>>({})
+  const [err, setErr] = useState<string | null>(null)
+
+  const pick = (type: GenericPhotoType, list: FileList | null) => {
+    setErr(null)
+    const file = list?.[0]
+    if (!file) return
+    if (!PHOTO_ACCEPT.includes(file.type)) return setErr(`“${file.name}” is not a JPEG/PNG/WebP image.`)
+    if (file.size > PHOTO_MAX_MB * 1024 * 1024) return setErr(`“${file.name}” is larger than ${PHOTO_MAX_MB} MB.`)
+    const old = photos.find((p) => p.type === type)
+    if (old) URL.revokeObjectURL(old.url)
+    setPhotos([...photos.filter((p) => p.type !== type), { type, file, url: URL.createObjectURL(file) }])
+    const el = inputs.current[type]
+    if (el) el.value = ''
+  }
+  const remove = (type: GenericPhotoType) => {
+    const old = photos.find((p) => p.type === type)
+    if (old) URL.revokeObjectURL(old.url)
+    setPhotos(photos.filter((p) => p.type !== type))
+  }
+
+  return (
+    <div className="space-y-3 sm:col-span-2">
+      <div>
+        <p className="text-sm font-medium text-slate-800">Photos <span className="font-normal text-slate-500">(optional — JPEG/PNG/WebP, max {PHOTO_MAX_MB} MB each)</span></p>
+        <p className="text-xs text-slate-500">Front, back and a condition close-up. They upload after the assignment is created.</p>
+      </div>
+      {err && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{err}</div>}
+      <div className="grid gap-3 sm:grid-cols-3">
+        {PHOTO_SLOTS.map(({ type, label }) => {
+          const p = photos.find((x) => x.type === type)
+          return (
+            <div key={type} className="space-y-1">
+              <input ref={(el) => { inputs.current[type] = el }} type="file" accept={PHOTO_ACCEPT.join(',')} capture="environment" className="hidden"
+                onChange={(e) => pick(type, e.target.files)} />
+              <button type="button" onClick={() => inputs.current[type]?.click()}
+                className={`relative flex aspect-square w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 border-dashed text-sm transition ${p ? 'border-emerald-400 bg-emerald-50/40' : 'border-slate-300 text-slate-400 hover:border-slate-400'}`}>
+                {p ? <img src={p.url} alt={label} className="h-full w-full object-cover" /> : <><Camera className="h-8 w-8" /><span>{label}</span></>}
+              </button>
+              {p && (
+                <div className="flex items-center justify-between text-xs text-slate-600">
+                  <span className="truncate">{p.file.name}</span>
+                  <button type="button" onClick={() => remove(type)} aria-label={`Remove ${label}`} className="text-slate-400 hover:text-red-600"><X className="h-4 w-4" /></button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 /** Available-asset picker for non-phone types. Phones are filtered out (they go through /phones/assign). */
@@ -234,6 +299,7 @@ export default function GenericAssignPage() {
   const nav = useNavigate()
   const [step, setStep] = useState(0)
   const [draft, setDraft] = useState<GenericDraft>(emptyDraft)
+  const [photos, setPhotos] = useState<GenericPhotoPick[]>([])
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const employees = useEmployees({ pageSize: 100 })
@@ -273,7 +339,18 @@ export default function GenericAssignPage() {
     const dept = departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)
     const isCallCenter = dept?.type === 'CALLCENTER'
     create.mutate(buildGenericPayload(draft, isCallCenter), {
-      onSuccess: (assignment) => nav(`/assignments/${assignment.id}`, { replace: true }),
+      onSuccess: async (assignment) => {
+        const failed: string[] = []
+        for (const p of photos) {
+          try {
+            const f = new FormData(); f.append('type', p.type); f.append('photos', p.file)
+            await api.upload(`/assignments/${assignment.id}/photos`, f)
+          } catch { failed.push(p.type) }
+        }
+        // Assignment exists either way — go to it; failed photos can be re-added from its page.
+        void failed
+        nav(`/assignments/${assignment.id}`, { replace: true })
+      },
     })
   }
 
@@ -347,6 +424,7 @@ export default function GenericAssignPage() {
             <Field label="Notes" className="sm:col-span-2">
               <Input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder="Optional notes about the handover" />
             </Field>
+            <GenericPhotoPicker photos={photos} setPhotos={setPhotos} />
           </div>
         )}
 
@@ -364,6 +442,15 @@ export default function GenericAssignPage() {
               {reviewRow('Condition', draft.conditionAtHandover)}
               {reviewRow('Expected return', draft.expectedReturnAt)}
               {reviewRow('Notes', draft.notes)}
+              {reviewRow('Photos', photos.length ? (
+                <span className="flex flex-wrap gap-2">
+                  {photos.map((p) => (
+                    <span key={p.type} className="inline-flex flex-col items-center gap-0.5 text-xs text-slate-500">
+                      <img src={p.url} alt={`${p.type} thumbnail`} className="h-16 w-16 rounded-md border border-slate-200 object-cover" />{titleCase(p.type)}
+                    </span>
+                  ))}
+                </span>
+              ) : undefined)}
             </dl>
             {create.isError && (
               <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">

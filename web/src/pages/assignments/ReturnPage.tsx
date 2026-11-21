@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Camera, CheckCircle2, TriangleAlert, X } from 'lucide-react'
-import { useAssignmentReturnForm, useSubmitPhoneReturn, useUploadReturnPhotos } from '@/api/hooks'
-import type { ComparisonField, Photo, ReturnOutState, SelectOption } from '@/api/types'
+import { useAssignmentDetail, useAssignmentReturnForm, useSubmitPhoneReturn, useUploadReturnPhotos } from '@/api/hooks'
+import type { AssetConditionChange, ComparisonField, Photo, ReturnOutState, SelectOption } from '@/api/types'
 import { CONDITIONS } from '@/api/types'
 import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, SearchableSelect, Select, Spinner, Textarea } from '@/components/ui'
@@ -55,10 +55,11 @@ const toNum = (v: string): number | null => (v === '' ? null : Number(v))
 const toStr = (v: string): string | null => (v === '' ? null : v)
 
 /** Builds the §8.2 return body. Omitted keys = unchanged (server copies from out). */
-function buildReturnPayload(f: ReturnFormState) {
+function buildReturnPayload(f: ReturnFormState, itemConditions?: { assetId: string; condition: string }[]) {
   return {
     returnCondition: f.returnCondition,
     returnNotes: toStr(f.returnNotes) ?? undefined,
+    itemConditions: itemConditions && itemConditions.length ? itemConditions : undefined,
     return: {
       wa1ChatNormalCount: toNum(f.wa1ChatNormalCount),
       wa1ChatArchivedCount: toNum(f.wa1ChatArchivedCount),
@@ -241,6 +242,7 @@ interface ReturnResultState {
   assignmentCode: string
   oldPhotos: Photo[]
   newPhotos: Photo[]
+  assetConditions: AssetConditionChange[]
 }
 
 function IdSelect({ value, label, options, onChange }: {
@@ -266,7 +268,14 @@ export default function ReturnPage() {
   const [returnPhotos, setReturnPhotos] = useState<ReturnPick[]>([])
   const [persistedPhotos, setPersistedPhotos] = useState<Photo[]>([])
   const [photoErr, setPhotoErr] = useState<string | null>(null)
-
+  // Bundled accessories (monitor/mouse/…) travel with the primary asset; each can come back in its own condition.
+  const detail = useAssignmentDetail(id)
+  const bundled = useMemo(
+    () => (detail.data?.items ?? []).filter((i) => i.role === 'BUNDLED' && i.asset),
+    [detail.data],
+  )
+  const [itemConds, setItemConds] = useState<Record<string, string>>({})
+  const itemCondFor = (assetId: string, handover?: string | null) => itemConds[assetId] ?? handover ?? 'GOOD'
   const out = data?.out
   const formState = useMemo(() => (out ? fromOut(out) : null), [out])
   const active = form ?? formState
@@ -317,11 +326,16 @@ export default function ReturnPage() {
   }
 
   const doSubmit = () => {
-    submit.mutate(buildReturnPayload(form ?? formState!), {
+    // Only send accessories whose condition the user actually changed from handover.
+    const changedItems = bundled
+      .filter((i) => itemConds[i.asset!.id] && itemConds[i.asset!.id] !== i.conditionAtHandover)
+      .map((i) => ({ assetId: i.asset!.id, condition: itemConds[i.asset!.id] }))
+    submit.mutate(buildReturnPayload(form ?? formState!, changedItems), {
       onSuccess: (r) => setResult({
         comparison: r.comparison,
         hasDiscrepancies: r.hasDiscrepancies,
         assignmentCode: r.assignmentCode,
+        assetConditions: r.assetConditions ?? [],
         oldPhotos: (r.photos?.handover?.length ? r.photos.handover : data?.handoverPhotos) ?? [],
         newPhotos: r.photos?.return?.length
           ? r.photos.return
@@ -348,6 +362,27 @@ export default function ReturnPage() {
           )}
         </div>
         <div className="space-y-4">
+          {result.assetConditions.length > 0 && (
+            <div className="card overflow-hidden" data-testid="asset-conditions">
+              <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Asset condition</div>
+              <ul className="divide-y divide-slate-100 text-sm">
+                {result.assetConditions.map((c) => (
+                  <li key={c.assetId} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+                    <span>
+                      <span className="font-mono text-xs font-semibold text-slate-700">{c.code}</span>
+                      <span className="ml-2 text-slate-600">{c.name}</span>
+                    </span>
+                    <span className="text-slate-900">
+                      Asset condition is now: <strong>{c.to ? titleCase(c.to) : '—'}</strong>
+                      {c.changed
+                        ? <span className="ml-2 text-xs text-amber-700">({c.from ? titleCase(c.from) : '—'} → {c.to ? titleCase(c.to) : '—'})</span>
+                        : <span className="ml-2 text-xs text-slate-500">(unchanged)</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <ComparisonTable comparison={result.comparison} />
           <PhotoComparison oldPhotos={result.oldPhotos} newPhotos={result.newPhotos} />
         </div>
@@ -440,6 +475,26 @@ export default function ReturnPage() {
               <IdSelect label="Charger cable" value={active!.chargerCableAssetId} options={cableOpts} onChange={(v) => set({ chargerCableAssetId: v })} />
               <IdSelect label="Charger adapter" value={active!.chargerAdapterAssetId} options={adapterOpts} onChange={(v) => set({ chargerAdapterAssetId: v })} />
             </div>
+            {bundled.length > 0 && (
+              <div className="rounded-xl border border-slate-200 p-4">
+                <h3 className="mb-1 text-sm font-semibold text-slate-900">Bundled items — condition at return</h3>
+                <p className="mb-3 text-xs text-slate-500">Each accessory returns with the main asset. Change the condition of any that came back worse.</p>
+                <div className="space-y-2">
+                  {bundled.map((i) => (
+                    <div key={i.id} className="grid items-center gap-2 sm:grid-cols-[1fr_10rem]">
+                      <span className="text-sm text-slate-800">
+                        <span className="font-mono text-xs font-semibold">{i.asset!.code}</span> {i.asset!.name}
+                        <span className="ml-2 text-xs text-slate-500">at handover: {i.conditionAtHandover ? titleCase(i.conditionAtHandover) : '—'}</span>
+                      </span>
+                      <Select aria-label={`Condition of ${i.asset!.code}`} value={itemCondFor(i.asset!.id, i.conditionAtHandover)}
+                        onChange={(e) => setItemConds({ ...itemConds, [i.asset!.id]: e.target.value })}>
+                        {CONDITIONS.map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="rounded-xl border border-slate-200 p-4">
               <h3 className="mb-1 text-sm font-semibold text-slate-900">Photos</h3>
               <ReturnPhotoPicker photos={returnPhotos} uploading={upload.isPending} error={photoErr} onPick={addPhoto} onRemove={removePhoto} />

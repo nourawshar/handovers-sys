@@ -224,6 +224,8 @@ export interface Assignment {
   assignedAt?: string | null
   expectedReturnAt?: string | null
   returnedAt?: string | null
+  /** Total items in the assignment (primary + accessories) when the list endpoint provides it. */
+  itemCount?: number | null
 }
 
 export interface Department {
@@ -321,7 +323,7 @@ export interface AssignmentItem {
   role: string
   conditionAtHandover?: string | null
   returnCondition?: string | null
-  asset?: { id: string; code: string; name: string } | null
+  asset?: { id: string; code: string; name: string; photos?: { id: string; type: string; url: string }[] } | null
 }
 
 /** Full assignment detail incl. items + phone detail + photos (§7.2). */
@@ -474,6 +476,19 @@ export interface ReturnResult {
   comparison: ComparisonField[]
   /** Old (handover) vs new (return) image sets (BE-1) — `{handover, return}`. */
   photos?: { handover?: Photo[]; return?: Photo[] }
+  /** What the return did to each returned asset's own condition (primary first). */
+  assetConditions?: AssetConditionChange[]
+}
+
+export interface AssetConditionChange {
+  assetId: string
+  code: string
+  name: string
+  role: string
+  from: string | null
+  to: string | null
+  changed: boolean
+  status?: string | null
 }
 
 export interface ListResult<T> {

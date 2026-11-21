@@ -77,7 +77,13 @@ function ReceiptBody({ a }: { a: AssignmentDetail }) {
   const pd = a.phoneDetail
   const sim2 = pd?.sim2Number
   const primary = a.items.find((i) => i.role === 'PRIMARY') ?? a.items[0]
-  const photos = a.photos.filter((p) => p.type === 'FRONT' || p.type === 'BACK')
+  const photos = a.photos.filter((p) => p.type === 'FRONT' || p.type === 'BACK' || p.type === 'CONDITION')
+  const photoLabel = (t: string) => (t === 'FRONT' ? 'Ön / Front' : t === 'BACK' ? 'Arka / Back' : t === 'CONDITION' ? 'Durum / Condition' : titleCase(t))
+  // Each item's own asset photos (items[].asset.photos), captioned with code + name.
+  const itemPhotos = a.items
+    .filter((i) => i.asset && (i.asset.photos?.length ?? 0) > 0)
+    .map((i) => ({ key: i.id, asset: i.asset!, photos: i.asset!.photos! }))
+  const hasAnyPhotos = photos.length > 0 || itemPhotos.length > 0
 
   const bitrixLabel = pd
     ? pd.bitrixAccount
@@ -140,19 +146,39 @@ function ReceiptBody({ a }: { a: AssignmentDetail }) {
         </>
       )}
 
-      <section className="receipt-section">
+      <section className="receipt-section receipt-photos-section">
         <h2>Fotoğraflar / Photos</h2>
-        {photos.length === 0 ? (
+        {!hasAnyPhotos ? (
           <p className="receipt-empty">Fotoğraf yok / No photos recorded.</p>
         ) : (
-          <div className="receipt-photos">
-            {photos.map((p) => (
-              <div key={p.id} className="receipt-photo">
-                <img src={p.url} alt={`${p.type} photo`} />
-                <span>{p.type === 'FRONT' ? 'Ön / Front' : 'Arka / Back'}</span>
+          <>
+            {photos.length > 0 && (
+              <>
+                <h3 className="receipt-subhead">Teslim fotoğrafları / Handover photos</h3>
+                <div className="receipt-photos">
+                  {photos.map((p) => (
+                    <div key={p.id} className="receipt-photo">
+                      <img src={p.url} alt={`${p.type} photo`} />
+                      <span>{photoLabel(p.type)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {itemPhotos.map((it) => (
+              <div key={it.key} className="receipt-item-photos">
+                <h3 className="receipt-subhead">{it.asset.code} · {it.asset.name}</h3>
+                <div className="receipt-photos">
+                  {it.photos.map((p) => (
+                    <div key={p.id} className="receipt-photo">
+                      <img src={p.url} alt={`${it.asset.code} ${p.type} photo`} />
+                      <span>{it.asset.code} · {it.asset.name}{p.type !== 'GENERAL' ? ` (${photoLabel(p.type)})` : ''}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
-          </div>
+          </>
         )}
       </section>
 
@@ -215,7 +241,9 @@ export default function AssignmentReceiptPage() {
         .receipt-row dt { width: 46%; flex: none; font-size: 12px; color: #475569; }
         .receipt-row dd { flex: 1; font-size: 13px; font-weight: 500; color: #0f172a; overflow-wrap: anywhere; }
 
-        .receipt-photos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .receipt-photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+        .receipt-subhead { font-size: 11px; font-weight: 600; color: #334155; margin: 8px 0 6px; }
+        .receipt-item-photos { break-inside: avoid; }
         .receipt-photo { break-inside: avoid; text-align: center; }
         .receipt-photo img { width: 100%; max-width: 120px; border: 1px solid #cbd5e1; border-radius: 3px; }
         .receipt-photo span { display: block; margin-top: 3px; font-size: 11px; color: #475569; }
@@ -233,7 +261,8 @@ export default function AssignmentReceiptPage() {
           .receipt-toolbar { display: none !important; }
           .receipt-root { padding: 0 !important; margin: 0 !important; background: #fff !important; }
           .receipt-sheet { box-shadow: none; max-width: none; padding: 0; border-radius: 0; }
-          .receipt-photo img { width: 60mm; }
+          .receipt-photo img { width: 52mm; }
+          .receipt-section.receipt-photos-section { break-inside: auto; }
           .receipt-row, .receipt-photo, .receipt-section { break-inside: avoid; }
         }
       `}</style>

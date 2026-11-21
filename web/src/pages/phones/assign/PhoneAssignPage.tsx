@@ -34,6 +34,8 @@ export interface WizardDraft {
   workIdentity: WorkIdentityValue
   phoneAssetId: string
   imei: string
+  /** "This phone has a SIM / WhatsApp" — OFF means no SIM/WhatsApp data is required or sent. */
+  hasSim: boolean
   sim1Number: string
   sim1AssetId: string
   wa1: WaState
@@ -54,7 +56,7 @@ const emptyWa = (): WaState => ({
 
 export const emptyDraft = (): WizardDraft => ({
   employeeId: '', workIdentity: { name: '', departmentTeamId: '', roomId: '' }, phoneAssetId: '', imei: '',
-  sim1Number: '', sim1AssetId: '', wa1: emptyWa(),
+  hasSim: true, sim1Number: '', sim1AssetId: '', wa1: emptyWa(),
   includeSim2: false, sim2Number: '', sim2AssetId: '', wa2: emptyWa(),
   bitrixAccountId: '', chargerCableAssetId: '', chargerAdapterAssetId: '', notes: '',
 })
@@ -88,11 +90,13 @@ export const stepSchemas: z.ZodTypeAny[] = [
   }),
   // 2. Phone
   z.object({ phoneAssetId: z.string().min(1, 'Select a phone') }),
-  // 3. SIM1 + WhatsApp main
+  // 3. SIM1 + WhatsApp main — everything optional (a phone can go out with no SIM, SIM only, or SIM + WhatsApp).
+  //    Cross-field rules live in validateSimStep().
   z.object({
-    sim1Number: z.string().trim().min(1, 'SIM 1 number is required'),
-    sim1AssetId: z.string(), // SIM asset optional per README A9
-    wa1: z.object(waSchema(true)),
+    hasSim: z.boolean(),
+    sim1Number: z.string(),
+    sim1AssetId: z.string(),
+    wa1: z.object(waSchema(false)),
   }),
   // 4. SIM2 + WhatsApp secondary (optional)
   z.object({
@@ -121,13 +125,32 @@ export function validateStep(schema: z.ZodTypeAny, draft: WizardDraft): Record<s
   return out
 }
 
+/** True when the user typed any WhatsApp detail beyond the auto-filled number/variant. */
+export const waHasDetails = (w: WaState): boolean =>
+  [w.backupEmail, w.backupDate, w.backupUsedGB, w.backupTotalGB, w.chatNormalCount, w.chatArchivedCount].some((v) => v.trim() !== '')
+
+/** Step-3 rules: everything optional, but any WhatsApp detail needs a SIM and a matching number. */
+export function validateSimStep(draft: WizardDraft): Record<string, string> {
+  if (!draft.hasSim) return {}
+  const out = validateStep(stepSchemas[2], draft)
+  if (waHasDetails(draft.wa1)) {
+    const sim = draft.sim1Number.trim()
+    const wn = draft.wa1.phoneNumber.trim()
+    if (!sim) out.sim1Number = 'Select the SIM card for this WhatsApp account (or clear the WhatsApp details)'
+    else if (wn && wn !== sim) out['wa1.phoneNumber'] = 'WhatsApp number must equal the SIM 1 number'
+  }
+  return out
+}
+
 const toNum = (v: string): number | null => (v === '' ? null : Number(v))
 const toStr = (v: string): string | null => (v === '' ? null : v)
 
 /** Builds the §7.6 request body from the draft + selected phone (CHANGE 4: workIdentity instead of workIdentityId). */
 export function buildPhonePayload(draft: WizardDraft, isCallCenter: boolean): PhoneAssignmentPayload {
   const w1 = draft.wa1
-  const useSim2 = draft.includeSim2
+  const hasSim = draft.hasSim
+  const hasWa = hasSim && waHasDetails(w1)
+  const useSim2 = hasSim && draft.includeSim2
   const w2 = draft.wa2
   const wi = draft.workIdentity
   // Non-call-center identities use the employee's real name — no work identity is sent.
@@ -144,17 +167,18 @@ export function buildPhonePayload(draft: WizardDraft, isCallCenter: boolean): Ph
     workIdentity,
     phoneAssetId: draft.phoneAssetId,
     imei: draft.imei || null,
-    sim1Number: toStr(draft.sim1Number),
-    sim1AssetId: toStr(draft.sim1AssetId) ?? undefined,
-    wa1Business: w1.business,
-    wa1PhoneNumber: toStr(w1.phoneNumber),
-    wa1BackupEmail: toStr(w1.backupEmail),
-    wa1BackupDate: toStr(w1.backupDate),
-    wa1BackupUsedGB: toNum(w1.backupUsedGB),
-    wa1BackupTotalGB: toNum(w1.backupTotalGB),
-    wa1ChatNormalCount: toNum(w1.chatNormalCount),
-    wa1ChatArchivedCount: toNum(w1.chatArchivedCount),
-    wa1AppVariant: w1.appVariant as WaVariant,
+    sim1Number: hasSim ? toStr(draft.sim1Number) : null,
+    sim1AssetId: hasSim ? toStr(draft.sim1AssetId) : null,
+    // WhatsApp is only sent when the user filled something in; otherwise nulls.
+    wa1Business: hasWa ? w1.business : false,
+    wa1PhoneNumber: hasWa ? toStr(w1.phoneNumber) : null,
+    wa1BackupEmail: hasWa ? toStr(w1.backupEmail) : null,
+    wa1BackupDate: hasWa ? toStr(w1.backupDate) : null,
+    wa1BackupUsedGB: hasWa ? toNum(w1.backupUsedGB) : null,
+    wa1BackupTotalGB: hasWa ? toNum(w1.backupTotalGB) : null,
+    wa1ChatNormalCount: hasWa ? toNum(w1.chatNormalCount) : null,
+    wa1ChatArchivedCount: hasWa ? toNum(w1.chatArchivedCount) : null,
+    wa1AppVariant: hasWa ? (w1.appVariant as WaVariant) : null,
     sim2Number: useSim2 ? toStr(draft.sim2Number) : null,
     sim2AssetId: useSim2 ? toStr(draft.sim2AssetId) ?? undefined : null,
     wa2Business: w2.business,
@@ -394,7 +418,7 @@ export default function PhoneAssignPage() {
     }
 
   const next = () => {
-    const e = validateStep(stepSchemas[step], draft)
+    const e = step === 2 ? validateSimStep(draft) : validateStep(stepSchemas[step], draft)
     // Call-center identities require a work name + room (CHANGE 4).
     if (step === 0) {
       const dept = departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)
@@ -485,8 +509,17 @@ export default function PhoneAssignPage() {
 
         {step === 2 && (
           <div className="space-y-4">
-            <Field label="SIM card asset" required error={errors.sim1Number}
-              hint="The SIM's number is the single source for both SIM 1 and the main WhatsApp number.">
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
+              <input type="checkbox" className="accent-brand-600" checked={draft.hasSim}
+                onChange={(e) => setDraft({ ...draft, hasSim: e.target.checked })} />
+              This phone has a SIM / WhatsApp
+            </label>
+            {!draft.hasSim && (
+              <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">The phone will be delivered without a SIM or WhatsApp account. Nothing on this step is required.</p>
+            )}
+            {draft.hasSim && (<>
+            <Field label="SIM card asset" error={errors.sim1Number}
+              hint="Optional. The SIM's number is the single source for both SIM 1 and the main WhatsApp number.">
               <SearchableSelect
                 options={(sims.data?.items ?? []).map((s) => ({ value: s.id, label: `${s.code} · ${s.name} · ${simNumber(s) || 'no number'}` }))}
                 value={draft.sim1AssetId}
@@ -502,11 +535,17 @@ export default function PhoneAssignPage() {
                 <p className="mt-1 text-xs text-slate-500">SIM 1 / WhatsApp number: <span className="font-mono font-semibold text-slate-800">{draft.sim1Number}</span></p>
               )}
             </Field>
-            <WaFields title="Main WhatsApp" wa={draft.wa1} onChange={(wa1) => setDraft({ ...draft, wa1 })} required backupEmailOptions={gmailOptions} />
+            <p className="text-xs text-slate-500">WhatsApp details are optional. If you fill in any of them, a SIM card must be selected above.</p>
+            {errors['wa1.phoneNumber'] && <p className="text-xs text-red-600">{errors['wa1.phoneNumber']}</p>}
+            <WaFields title="Main WhatsApp (optional)" wa={draft.wa1} onChange={(wa1) => setDraft({ ...draft, wa1 })} required={false} backupEmailOptions={gmailOptions} />
+            </>)}
           </div>
         )}
 
-        {step === 3 && (
+        {step === 3 && !draft.hasSim && (
+          <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">No SIM on this phone — nothing to add here. Continue to the next step.</p>
+        )}
+        {step === 3 && draft.hasSim && (
           <div className="space-y-4">
             <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
               <input type="checkbox" className="accent-brand-600" checked={draft.includeSim2}
@@ -643,6 +682,7 @@ export function ReviewSnapshot({ draft, photos, names }: {
   )
   const w1 = draft.wa1
   const w2 = draft.wa2
+  const showWa = draft.hasSim && waHasDetails(w1)
   return (
     <dl className="divide-y divide-slate-100">
       {row('Employee', names?.employee ?? draft.employeeId)}
@@ -650,14 +690,18 @@ export function ReviewSnapshot({ draft, photos, names }: {
       {row('Department', names?.department ?? draft.workIdentity.departmentTeamId)}
       {row('Room', names?.room ?? draft.workIdentity.roomId)}
       {row('Phone', names?.phone ? `${names.phone} · ${draft.imei || 'no IMEI'}` : <span className="font-mono">{draft.phoneAssetId}</span>)}
-      {row('SIM 1', draft.sim1Number)}
-      {row('WhatsApp 1 (main)', `${w1.business ? 'Business' : 'Normal'} · ${w1.phoneNumber || '—'}`)}
-      {row('Contact', w1.phoneNumber)}
-      {row('Backup email (main)', w1.backupEmail)}
-      {row('Last backup (main)', `${w1.backupDate ? fmtDate(w1.backupDate) : '—'} · ${backupSummary(w1.backupUsedGB, w1.backupTotalGB)}`)}
-      {row('Chats (main)', `normal ${w1.chatNormalCount || '0'} · archived ${w1.chatArchivedCount || '0'}`)}
-      {row('App variant (main)', w1.appVariant && titleCase(w1.appVariant))}
-      {draft.includeSim2 && (
+      {row('SIM 1', draft.hasSim ? (draft.sim1Number || 'No SIM selected') : 'No SIM / WhatsApp')}
+      {showWa && (
+        <>
+          {row('WhatsApp 1 (main)', `${w1.business ? 'Business' : 'Normal'} · ${w1.phoneNumber || '—'}`)}
+          {row('Contact', w1.phoneNumber)}
+          {row('Backup email (main)', w1.backupEmail)}
+          {row('Last backup (main)', `${w1.backupDate ? fmtDate(w1.backupDate) : '—'} · ${backupSummary(w1.backupUsedGB, w1.backupTotalGB)}`)}
+          {row('Chats (main)', `normal ${w1.chatNormalCount || '0'} · archived ${w1.chatArchivedCount || '0'}`)}
+          {row('App variant (main)', w1.appVariant && titleCase(w1.appVariant))}
+        </>
+      )}
+      {draft.hasSim && draft.includeSim2 && (
         <>
           {row('SIM 2', draft.sim2Number)}
           {row('WhatsApp 2', `${w2.business ? 'Business' : 'Normal'} · ${w2.phoneNumber || ''}`)}
