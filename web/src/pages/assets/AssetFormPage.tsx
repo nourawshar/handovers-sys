@@ -8,7 +8,7 @@ import { useAsset, useCategories, useCategoryFields, useRooms, useSaveAsset } fr
 import { api } from '@/api/client'
 import { CONDITIONS, type CategoryField } from '@/api/types'
 import { titleCase } from '@/lib/utils'
-import { Button, ErrorState, Field, Input, PageHeader, Select, Spinner, Textarea } from '@/components/ui'
+import { Button, ErrorState, Field, Input, PageHeader, SearchableSelect, Select, Spinner, Textarea } from '@/components/ui'
 import { baseAssetSchema, buildCustomSchema, customToForm, customToPayload, IMEI_RE, isPhoneCategory } from './assetSchema'
 
 type FormValues = z.infer<typeof baseAssetSchema> & { custom: Record<string, unknown> }
@@ -252,10 +252,9 @@ export default function AssetFormPage() {
           <h2 className="mb-4 text-sm font-semibold text-slate-900">General</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Category" required error={errors.categoryId?.message}>
-              <Select invalid={!!errors.categoryId} disabled={editing} {...register('categoryId')}>
-                <option value="">Select category…</option>
-                {categories.data?.filter((c) => c.isActive).map((c) => <option key={c.id} value={c.id}>{c.parentId ? '— ' : ''}{c.name}</option>)}
-              </Select>
+              <Controller control={control} name="categoryId" render={({ field }) => (
+                <SearchableSelect ariaLabel="Category" options={(categories.data ?? []).filter((c) => c.isActive).map((c) => ({ value: c.id, label: `${c.parentId ? '— ' : ''}${c.name}` }))} value={field.value ?? ''} onChange={field.onChange} disabled={editing} placeholder="Type to filter categories…" selectPlaceholder="Select category…" />
+              )} />
             </Field>
             {isSim ? (
               <p className="text-sm text-slate-500">SIM cards only need their category-specific details below — the name is auto-generated from the phone number.</p>
@@ -280,11 +279,9 @@ export default function AssetFormPage() {
                   <Input type="number" min={0} invalid={!!errors.qty} {...register('qty')} />
                 </Field>
                 <Field label="Location / room">
-                  <Select {...register('roomId')}>
-                    <option value="">— None —</option>
-                    {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
-                    {hasItRoom ? null : <option value="IT">IT</option>}
-                  </Select>
+                  <Controller control={control} name="roomId" render={({ field }) => (
+                    <SearchableSelect ariaLabel="Location / room" options={[...(rooms.data ?? []).map((r) => ({ value: r.id, label: r.code })), ...(hasItRoom ? [] : [{ value: 'IT', label: 'IT' }])]} value={field.value ?? ''} onChange={field.onChange} placeholder="Type to filter rooms…" selectPlaceholder="— None —" />
+                  )} />
                 </Field>
                 <Field label="Notes" className="sm:col-span-2" error={errors.notes?.message}>
                   <Textarea {...register('notes')} />

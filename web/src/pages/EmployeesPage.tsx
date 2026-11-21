@@ -7,7 +7,7 @@ import { Link } from 'react-router-dom'
 import { useAuthStore } from '@/store/auth'
 import { isAdmin } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
-import { Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap, Textarea } from '@/components/ui'
+import { Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, SearchableSelect, Select, Spinner, StatusBadge, TableWrap, Textarea } from '@/components/ui'
 import AssetDrawer from '@/pages/assets/AssetDrawer'
 
 /** Devices currently held by an employee, from GET /assets?holderId=… (loaded on demand). */
@@ -116,16 +116,10 @@ function EmployeeFormModal({ employee, onClose }: { employee: Employee | null; o
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Team" required>
-              <Select value={departmentTeamId} onChange={(e) => setDept(e.target.value)} aria-label="Team">
-                <option value="">Select team…</option>
-                {(depts.data ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </Select>
+              <SearchableSelect ariaLabel="Team" options={(depts.data ?? []).map((d) => ({ value: d.id, label: d.name }))} value={departmentTeamId} onChange={setDept} placeholder="Type to filter teams…" selectPlaceholder="Select team…" />
             </Field>
             <Field label="Room" hint={!selectedDept ? 'Appears once a team is chosen' : selectedDept.type === 'CALLCENTER' ? 'Call-Center room' : 'Hospital room'}>
-              <Select value={effectiveRoomId} onChange={(e) => setRoomId(e.target.value)} aria-label="Room" disabled={!selectedDept}>
-                <option value="">No room</option>
-                {visibleRooms.map((r) => <option key={r.id} value={r.id}>{r.code}{r.teamType ? ` · ${r.teamType}` : ''}</option>)}
-              </Select>
+              <SearchableSelect ariaLabel="Room" options={visibleRooms.map((r) => ({ value: r.id, label: `${r.code}${r.teamType ? ` · ${r.teamType}` : ''}` }))} value={effectiveRoomId} onChange={setRoomId} disabled={!selectedDept} placeholder="Type to filter rooms…" selectPlaceholder="No room" />
             </Field>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -199,15 +193,9 @@ export default function EmployeesPage() {
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name…" className="pl-9" aria-label="Search employees" />
         </div>
         {!leader && (
-          <Select value={roomId} onChange={(e) => setRoomId(e.target.value)} aria-label="Room">
-            <option value="">All rooms</option>
-            {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
-          </Select>
+          <SearchableSelect ariaLabel="Room" options={(rooms.data ?? []).map((r) => ({ value: r.id, label: r.code }))} value={roomId} onChange={setRoomId} placeholder="Type to filter rooms…" selectPlaceholder="All rooms" />
         )}
-        <Select value={departmentTeamId} onChange={(e) => setDept(e.target.value)} aria-label="Team">
-          <option value="">All teams</option>
-          {depts.data?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </Select>
+        <SearchableSelect ariaLabel="Team" options={(depts.data ?? []).map((d) => ({ value: d.id, label: d.name }))} value={departmentTeamId} onChange={setDept} placeholder="Type to filter teams…" selectPlaceholder="All teams" />
       </div>
       <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
         <div className="flex items-center justify-between">

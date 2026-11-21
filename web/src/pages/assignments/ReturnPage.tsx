@@ -5,7 +5,7 @@ import { useAssignmentReturnForm, useSubmitPhoneReturn, useUploadReturnPhotos } 
 import type { ComparisonField, Photo, ReturnOutState, SelectOption } from '@/api/types'
 import { CONDITIONS } from '@/api/types'
 import { fmtDate, titleCase } from '@/lib/utils'
-import { Badge, Button, EmptyState, ErrorState, Field, Input, Select, Spinner, Textarea } from '@/components/ui'
+import { Badge, Button, EmptyState, ErrorState, Field, Input, SearchableSelect, Select, Spinner, Textarea } from '@/components/ui'
 
 /* ------------------------------------------------------------------ */
 /* Return-state form model (string-based inputs)                       */
@@ -251,10 +251,7 @@ function IdSelect({ value, label, options, onChange }: {
 }) {
   return (
     <Field label={label}>
-      <Select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">— none —</option>
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </Select>
+      <SearchableSelect ariaLabel={label} options={options} value={value} onChange={onChange} placeholder="Type to filter…" selectPlaceholder="— none —" />
     </Field>
   )
 }

@@ -1,5 +1,5 @@
-import { forwardRef, useMemo, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
-import { AlertCircle, ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react'
+import { forwardRef, useEffect, useId, useMemo, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { AlertCircle, ChevronDown, ChevronLeft, ChevronRight, Loader2, X } from 'lucide-react'
 import { cn, titleCase } from '@/lib/utils'
 
 /* ---------- Button ---------- */
@@ -60,21 +60,26 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
     return <select ref={ref} className={cn('input pr-8', invalid && 'input-error', className)} {...p}>{children}</select>
   })
 
-/* ---------- SearchableSelect (CHANGE 5, FE-17) ---------- */
+/* ---------- SearchableSelect: single-control combobox ---------- */
 export interface SearchableOption {
   value: string
   label: string
 }
 
+/** Lower-case in both the Turkish and the default locale so i/İ/ı/I all match each other. */
+const TR_PLAIN: Record<string, string> = { ş: 's', ç: 'c', ğ: 'g', ö: 'o', ü: 'u', ı: 'i', â: 'a', î: 'i', û: 'u' }
+function foldTr(s: string): string[] {
+  // Also strip Turkish diacritics so typing "sahin" finds "Şahin" and "cagri" finds "Çağrı".
+  const plain = (x: string) => x.replace(/[şçğöüıâîû]/g, (c) => TR_PLAIN[c]).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return [plain(s.toLocaleLowerCase('tr')), plain(s.toLowerCase())]
+}
+
 /**
- * Type-to-filter dropdown: a text `<Input>` filters the options as the user types (case-insensitive
- * substring on `label`), then a native `<Select>` renders only the matches. Keeps the native select
- * for accessibility/scroll, so no long dropdown requires scrolling the full list.
- *
- * The currently selected option is force-included in the visible list even when the filter would hide
- * it — the native select must be able to render `value` or it shows a blank. The filter resets on pick.
+ * ONE control: a text input that shows the selected label when closed. Focus/click opens a listbox
+ * right under it; typing filters (substring, case- and Turkish-insensitive); ArrowUp/Down moves,
+ * Enter picks, Escape/Tab/outside-click close. A small (x) clears the value when one is set.
  */
-export function SearchableSelect({ options, value, onChange, placeholder = 'Type to filter…', selectPlaceholder = '— select —', notFound = 'No matching options', disabled, className }: {
+export function SearchableSelect({ options, value, onChange, placeholder = 'Type to filter…', selectPlaceholder = '— select —', notFound = 'No matching options', disabled, className, ariaLabel }: {
   options: SearchableOption[]
   value: string
   onChange: (value: string) => void
@@ -83,40 +88,138 @@ export function SearchableSelect({ options, value, onChange, placeholder = 'Type
   notFound?: string
   disabled?: boolean
   className?: string
+  ariaLabel?: string
 }) {
-  const [filter, setFilter] = useState('')
-  const needle = filter.trim().toLowerCase()
-  const filtered = useMemo(
-    () => options.filter((o) => !needle || o.label.toLowerCase().includes(needle)),
-    [options, needle],
-  )
-  const visible = useMemo(() => {
-    if (!value) return filtered
-    if (filtered.some((o) => o.value === value)) return filtered
-    const selected = options.find((o) => o.value === value)
-    return selected ? [selected, ...filtered] : filtered
-  }, [filtered, options, value])
-  const noMatch = !!needle && filtered.length === 0
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState(0)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
+  const uid = useId()
+  const listId = `${uid}-list`
 
+  const selected = options.find((o) => o.value === value)
+  const needles = useMemo(() => foldTr(query.trim()), [query])
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options
+    return options.filter((o) => {
+      const hay = foldTr(o.label)
+      return needles.some((n, i) => hay[i].includes(n))
+    })
+  }, [options, query, needles])
+
+  const close = () => { setOpen(false); setQuery('') }
+  const openList = () => {
+    if (disabled || open) return
+    const idx = filtered.findIndex((o) => o.value === value)
+    setActive(idx >= 0 ? idx : 0)
+    setOpen(true)
+  }
+  const pick = (v: string) => { onChange(v); close() }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    listRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView({ block: 'nearest' })
+  }, [active, open, filtered])
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!open) return openList()
+      setActive((i) => Math.min(i + 1, Math.max(filtered.length - 1, 0)))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open) return openList()
+      setActive((i) => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (open) {
+        e.preventDefault()
+        if (filtered[active]) pick(filtered[active].value)
+      }
+    } else if (e.key === 'Escape') {
+      if (open) { e.preventDefault(); e.stopPropagation(); close() }
+    } else if (e.key === 'Tab') {
+      if (open) close()
+    }
+  }
+
+  const showClear = !!value && !disabled
   return (
-    <div className={cn('space-y-1', className)}>
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-        <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={placeholder} className="pl-9" aria-label={placeholder} />
-      </div>
-      <Select
-        value={value}
+    <div ref={rootRef} className={cn('relative', className)}>
+      <input
+        ref={inputRef}
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-haspopup="listbox"
+        aria-activedescendant={open && filtered[active] ? `${uid}-opt-${active}` : undefined}
+        aria-label={ariaLabel ?? placeholder}
+        autoComplete="off"
         disabled={disabled}
-        onChange={(e) => {
-          setFilter('')
-          onChange(e.target.value)
-        }}
-        aria-label={placeholder}
-      >
-        <option value="">{selectPlaceholder}</option>
-        {visible.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </Select>
-      {noMatch && <p className="text-xs text-slate-500">{notFound}</p>}
+        className={cn('input', showClear ? 'pr-16' : 'pr-9', !open && !selected && 'text-slate-500')}
+        value={open ? query : (selected?.label ?? selectPlaceholder)}
+        placeholder={open ? placeholder : undefined}
+        onFocus={openList}
+        onClick={openList}
+        onChange={(e) => { setQuery(e.target.value); setActive(0); if (!open) setOpen(true) }}
+        onKeyDown={onKeyDown}
+      />
+      {showClear && (
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="Clear selection"
+          className="absolute right-8 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => { onChange(''); close() }}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+      <ChevronDown aria-hidden className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      {open && (
+        <ul
+          ref={listRef}
+          id={listId}
+          role="listbox"
+          className="absolute left-0 right-0 z-30 mt-1 max-h-60 overflow-auto rounded-lg border border-slate-200 bg-white py-1 text-sm shadow-lg"
+        >
+          {filtered.length === 0 ? (
+            <li className="px-3 py-2 text-slate-500">{notFound}</li>
+          ) : filtered.map((o, i) => (
+            <li
+              key={o.value}
+              id={`${uid}-opt-${i}`}
+              role="option"
+              aria-selected={o.value === value}
+              data-active={i === active}
+              className={cn(
+                'cursor-pointer px-3 py-1.5',
+                i === active && 'bg-slate-100',
+                o.value === value ? 'font-medium text-brand-700 bg-brand-50' : 'text-slate-800',
+                o.value === value && i === active && 'bg-brand-100',
+              )}
+              onMouseEnter={() => setActive(i)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(o.value)}
+            >
+              {o.label}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

@@ -5,7 +5,7 @@ import { CONDITIONS, REPORT_SLUGS, type ExportFormat, type ReportFilters, type R
 import { useAuthStore } from '@/store/auth'
 import { isAdmin } from '@/lib/permissions'
 import { titleCase } from '@/lib/utils'
-import { Button, EmptyState, ErrorState, PageHeader, Pagination, Select, Spinner, TableWrap } from '@/components/ui'
+import { Button, EmptyState, ErrorState, PageHeader, Pagination, SearchableSelect, Select, Spinner, TableWrap } from '@/components/ui'
 import { REPORT_COLUMNS } from './reportColumns'
 
 const PAGE_SIZE = 25
@@ -139,32 +139,20 @@ export default function ReportsPage() {
                 <option value="category">By category</option>
               </Select>
               {scope === 'room' && (
-                <Select value={roomId} onChange={(e) => set({ roomId: e.target.value })} aria-label="Room">
-                  <option value="">All rooms</option>
-                  {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
-                </Select>
+                <SearchableSelect ariaLabel="Room" options={(rooms.data ?? []).map((r) => ({ value: r.id, label: r.code }))} value={roomId} onChange={(v) => set({ roomId: v })} placeholder="Type to filter rooms…" selectPlaceholder="All rooms" />
               )}
               {scope === 'team' && (
-                <Select value={departmentTeamId} onChange={(e) => set({ departmentTeamId: e.target.value })} aria-label="Team">
-                  <option value="">All teams</option>
-                  {departments.data?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </Select>
+                <SearchableSelect ariaLabel="Team" options={(departments.data ?? []).map((d) => ({ value: d.id, label: d.name }))} value={departmentTeamId} onChange={(v) => set({ departmentTeamId: v })} placeholder="Type to filter teams…" selectPlaceholder="All teams" />
               )}
               {scope === 'category' && (
-                <Select value={categoryId} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
-                  <option value="">All categories</option>
-                  {categories.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </Select>
+                <SearchableSelect ariaLabel="Category" options={(categories.data ?? []).map((c) => ({ value: c.id, label: c.name }))} value={categoryId} onChange={(v) => set({ categoryId: v })} placeholder="Type to filter categories…" selectPlaceholder="All categories" />
               )}
             </>
           )}
 
           {report === 'condition' && (
             <>
-              <Select value={categoryId} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
-                <option value="">All categories</option>
-                {categories.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
+              <SearchableSelect ariaLabel="Category" options={(categories.data ?? []).map((c) => ({ value: c.id, label: c.name }))} value={categoryId} onChange={(v) => set({ categoryId: v })} placeholder="Type to filter categories…" selectPlaceholder="All categories" />
               <Select value={status} onChange={(e) => set({ status: e.target.value })} aria-label="Status">
                 <option value="">Any status</option>
                 {CONDITIONS.map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
@@ -188,10 +176,7 @@ export default function ReportsPage() {
           )}
 
           {report === 'room-composition' && (
-            <Select value={roomId} onChange={(e) => set({ roomId: e.target.value })} aria-label="Room">
-              <option value="">All rooms</option>
-              {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
-            </Select>
+            <SearchableSelect ariaLabel="Room" options={(rooms.data ?? []).map((r) => ({ value: r.id, label: r.code }))} value={roomId} onChange={(v) => set({ roomId: v })} placeholder="Type to filter rooms…" selectPlaceholder="All rooms" />
           )}
         </div>
       )}

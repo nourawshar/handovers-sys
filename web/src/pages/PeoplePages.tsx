@@ -7,7 +7,7 @@ import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
 import { can, isAdmin } from '@/lib/permissions'
 import { fmtDate, titleCase } from '@/lib/utils'
-import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap } from '@/components/ui'
+import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, SearchableSelect, Select, Spinner, StatusBadge, TableWrap } from '@/components/ui'
 
 export function AssignmentsPage() {
   const [status, setStatus] = useState('')
@@ -97,11 +97,11 @@ const TEAM_TYPES = ['CALLCENTER', 'HOSPITAL'] as const
 type TeamType = (typeof TEAM_TYPES)[number]
 
 /** Shared manager picker options (fetched once via React Query's cache). */
-function managerOptions(employees: Employee[]) {
+function managerOpts(employees: Employee[]) {
   return employees
     .slice()
     .sort((a, b) => a.fullName.localeCompare(b.fullName))
-    .map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)
+    .map((e) => ({ value: e.id, label: e.fullName }))
 }
 
 /** Create/edit modal (New room / Edit). Writes Admin-only in the caller. */
@@ -138,10 +138,7 @@ function RoomFormModal({ room, employees, onClose }: { room: Room | null; employ
             </Select>
           </Field>
           <Field label="Manager">
-            <Select value={managerEmployeeId} onChange={(e) => setManagerId(e.target.value)} aria-label="Manager">
-              <option value="">— No manager —</option>
-              {managerOptions(employees)}
-            </Select>
+            <SearchableSelect ariaLabel="Manager" options={managerOpts(employees)} value={managerEmployeeId} onChange={setManagerId} placeholder="Type to filter employees…" selectPlaceholder="— No manager —" />
           </Field>
           {err && <p className="text-sm text-red-600">{err}</p>}
         </div>
@@ -160,22 +157,22 @@ function SetManagerSelect({ room, employees }: { room: Room; employees: Employee
   const [err, setErr] = useState<string | null>(null)
   return (
     <div>
-      <Select
+      <SearchableSelect
+        ariaLabel={`Set manager for ${room.code}`}
+        options={managerOpts(employees)}
         value={room.managerEmployeeId ?? ''}
-        onChange={(e) => {
+        onChange={(v) => {
           setErr(null)
           save.mutate(
-            { managerEmployeeId: e.target.value || null },
+            { managerEmployeeId: v || null },
             { onError: (er) => setErr((er as Error).message) },
           )
         }}
         disabled={save.isPending}
-        aria-label={`Set manager for ${room.code}`}
+        placeholder="Type to filter employees…"
+        selectPlaceholder="— No manager —"
         className="text-xs"
-      >
-        <option value="">— No manager —</option>
-        {managerOptions(employees)}
-      </Select>
+      />
       {err && <p className="mt-1 text-xs text-red-600">{err}</p>}
     </div>
   )
@@ -308,10 +305,7 @@ function DepartmentFormModal({ dept, departments, onClose }: { dept: Department 
             </Select>
           </Field>
           <Field label="Parent department">
-            <Select value={parentId} onChange={(e) => setParentId(e.target.value)} aria-label="Parent department">
-              <option value="">— No parent —</option>
-              {parentOptions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </Select>
+            <SearchableSelect ariaLabel="Parent department" options={parentOptions.map((d) => ({ value: d.id, label: d.name }))} value={parentId} onChange={setParentId} placeholder="Type to filter departments…" selectPlaceholder="— No parent —" />
           </Field>
           <Field label="Sort order">
             <Input type="number" min={0} value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} placeholder="0" />

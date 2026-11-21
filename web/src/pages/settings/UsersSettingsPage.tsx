@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/auth'
 import { ROLE_LABEL } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
 import { fmtDate } from '@/lib/utils'
-import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, Select, Spinner, TableWrap } from '@/components/ui'
+import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, SearchableSelect, Select, Spinner, TableWrap } from '@/components/ui'
 
 const ROLES: Role[] = ['ADMIN', 'MANAGER', 'TEAM_LEADER', 'CALL_CENTER_MANAGER']
 
@@ -84,10 +84,7 @@ function UserFormModal({ user, onClose, currentUserId }: { user: User | null; on
             required={needsRoom}
             hint={needsRoom ? 'Team Leaders are scoped to their room.' : 'Only Team Leaders are assigned to a room.'}
           >
-            <Select value={roomId} onChange={(e) => setRoomId(e.target.value)} aria-label="Room" disabled={!needsRoom}>
-              <option value="">{needsRoom ? 'Select room…' : 'No room'}</option>
-              {rooms.data?.map((r) => <option key={r.id} value={r.id}>{r.code}{r.teamType ? ` · ${r.teamType}` : ''}</option>)}
-            </Select>
+            <SearchableSelect ariaLabel="Room" options={(rooms.data ?? []).map((r) => ({ value: r.id, label: `${r.code}${r.teamType ? ` · ${r.teamType}` : ''}` }))} value={roomId} onChange={setRoomId} disabled={!needsRoom} placeholder="Type to filter rooms…" selectPlaceholder={needsRoom ? 'Select room…' : 'No room'} />
           </Field>
           {isEdit ? (
             <Field label="Active" hint={isSelf ? 'You cannot deactivate your own account.' : undefined}>

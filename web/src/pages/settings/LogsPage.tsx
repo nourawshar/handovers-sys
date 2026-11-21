@@ -4,7 +4,7 @@ import { useAuditLogs, useUsers } from '@/api/hooks'
 import type { AuditLogEntry } from '@/api/types'
 import { useDebounce } from '@/lib/useDebounce'
 import { fmtDate, titleCase } from '@/lib/utils'
-import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, Select, Spinner, TableWrap } from '@/components/ui'
+import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, SearchableSelect, Spinner, TableWrap } from '@/components/ui'
 
 const PAGE_SIZE = 25
 
@@ -59,10 +59,7 @@ export default function LogsPage() {
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search action/target…" className="pl-9" aria-label="Search logs" />
         </div>
-        <Select value={actorId} onChange={(e) => setActorId(e.target.value)} aria-label="Actor">
-          <option value="">All actors</option>
-          {users.data?.items.map((u) => <option key={u.id} value={u.id}>{u.fullName} (@{u.username})</option>)}
-        </Select>
+        <SearchableSelect ariaLabel="Actor" options={(users.data?.items ?? []).map((u) => ({ value: u.id, label: `${u.fullName} (@${u.username})` }))} value={actorId} onChange={setActorId} placeholder="Type to filter actors…" selectPlaceholder="All actors" />
         <Input value={action} onChange={(e) => setAction(e.target.value)} placeholder="Action, e.g. asset.create" aria-label="Filter by action" />
         <Field label="From">
           <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From date" />
