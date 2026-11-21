@@ -218,6 +218,99 @@ async function assertNumbersFree(numbers, tx = prisma, excludeAssignmentId) {
   }
 }
 
+/** AssetCondition values (mirrors the Prisma enum). */
+const CONDITIONS = ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED'];
+
+/** The condition every asset of a handover is handed over in (Phase 8 R4 rule 1): the value submitted for that
+ * asset, else the asset's CURRENT condition — never a hard-coded default. The assets are read inside the handover
+ * transaction, after assertAssetsFree() took the per-asset locks, so a concurrent handover / return cannot change
+ * them between this read and the write-back.
+ * @param {import('@prisma/client').Prisma.TransactionClient} tx
+ * @param {Map<string, string|null|undefined>} submitted assetId → submitted condition (absent / null = not given)
+ * @returns {Promise<Map<string, { id: string, current: string, effective: string }>>} keyed by assetId, in `submitted` order
+ */
+async function resolveHandoverConditions(tx, submitted) {
+  const rows = await tx.asset.findMany({ where: { id: { in: [...submitted.keys()] } }, select: { id: true, condition: true } });
+  const currentById = new Map(rows.map((r) => [r.id, r.condition]));
+  const resolved = new Map();
+  for (const [id, wanted] of submitted) {
+    // The route schemas already reject these (400); the service refuses them too so it never trusts its caller.
+    if (wanted != null && !CONDITIONS.includes(wanted)) throw badRequest(`Invalid handover condition "${wanted}" (one of: ${CONDITIONS.join(', ')})`);
+    const current = currentById.get(id);
+    resolved.set(id, { id, current, effective: wanted ?? current });
+  }
+  return resolved;
+}
+
+/** Write the handover conditions back to the assets (Phase 8 R4 rule 3). For every asset handed over in a condition
+ * other than its current one: asset.condition ← the handover condition, plus an UPDATED timeline entry on that asset
+ * `{ field:'condition', from, to, assignmentCode, reason:'handover' }`. An asset handed over in the condition it
+ * already has is left alone (no write, no entry). Runs inside the handover transaction, so a handover that fails
+ * leaves every asset's condition untouched.
+ * @param {import('@prisma/client').Prisma.TransactionClient} tx
+ * @param {{ id: string, assignmentCode: string, employeeId: string, workIdentityId?: string|null }} assignment
+ * @param {Map<string, { id: string, current: string, effective: string }>} conditions from resolveHandoverConditions()
+ * @returns {Promise<Array<{ assetId: string, from: string, to: string }>>} the conditions that were changed
+ */
+async function writeBackHandoverConditions(tx, assignment, conditions, userId) {
+  const changes = [];
+  for (const { id, current, effective } of conditions.values()) {
+    if (effective === current) continue;
+    await tx.asset.update({ where: { id }, data: { condition: effective } });
+    await tx.assignmentTimelineEntry.create({
+      data: {
+        assignmentId: assignment.id,
+        assetId: id,
+        employeeId: assignment.employeeId,
+        workIdentityId: assignment.workIdentityId ?? null,
+        eventType: 'UPDATED',
+        snapshot: { field: 'condition', from: current, to: effective, assignmentCode: assignment.assignmentCode, reason: 'handover' },
+        createdById: userId,
+      },
+    });
+    changes.push({ assetId: id, from: current, to: effective });
+  }
+  return changes;
+}
+
+/** Value of one custom field as it is shown on the handover form / assignment detail: null when empty (null, ""),
+ * booleans as true / false (also when stored as the strings "true" / "false"), everything else as stored. */
+function customFieldDisplayValue(type, raw) {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (text === '') return null;
+    if (type === 'boolean' && (text === 'true' || text === 'false')) return text === 'true';
+    return text;
+  }
+  return raw; // numbers and real booleans — 0 and false are values, not "empty"
+}
+
+/** Custom-field values of several assets, loaded with ONE query (no N+1) and shaped for display (Phase 8 R3):
+ * Map(assetId → [{ key, label, type, value }]) — only non-empty values, labelled from the category field
+ * definition, ordered by the definition's sortOrder (then label, the order of the asset detail). Only fields that
+ * apply to the asset's category count: its own or its parent's (a subcategory inherits the parent's columns).
+ * @param {Array<{ id: string, categoryId: string, category?: { parentId?: string|null }|null }>} assets
+ * @param {import('@prisma/client').Prisma.TransactionClient|typeof prisma} [db]
+ */
+async function customFieldsByAsset(assets, db = prisma) {
+  const byId = new Map(assets.filter(Boolean).map((a) => [a.id, a]));
+  const result = new Map([...byId.keys()].map((id) => [id, []]));
+  if (!byId.size) return result;
+  const rows = await db.assetCustomFieldValue.findMany({
+    where: { assetId: { in: [...byId.keys()] } },
+    select: { assetId: true, value: true, field: { select: { key: true, label: true, type: true, sortOrder: true, categoryId: true } } },
+  });
+  rows.sort((a, b) => a.field.sortOrder - b.field.sortOrder || a.field.label.localeCompare(b.field.label));
+  for (const { assetId, value, field } of rows) {
+    const asset = byId.get(assetId);
+    if (field.categoryId !== asset.categoryId && field.categoryId !== asset.category?.parentId) continue;
+    const shown = customFieldDisplayValue(field.type, value);
+    if (shown !== null) result.get(assetId).push({ key: field.key, label: field.label, type: field.type, value: shown });
+  }
+  return result;
+}
+
 /** Prisma `where` for "this assignment sits in a room matching `roomWhere`" — the assignment's room is the
  * work-identity (seat) room, else the employee's room (contract §11). Used by the list, the detail guard and
  * the photo guard so all three give the same answer.
@@ -285,6 +378,9 @@ function resolvePhoneAccountIds({ bitrixAccountId, wa1PhoneNumber, wa2PhoneNumbe
 
 /** BE-1 — Phone assignment creation + listing + detail.
  * Core phone wizard (contract §7.6): create + activate atomically in one transaction.
+ * Handover condition (Phase 8 R4): `phoneCondition` is the condition the PHONE is handed over in, `condition` the one
+ * of the SIM / charger items; whatever is not submitted defaults to that asset's CURRENT condition. Every asset
+ * handed over in a different condition than it has is updated to it (+ an UPDATED timeline entry) in the same transaction.
  * @returns the fully hydrated ACTIVE assignment.
  */
 async function createPhoneAssignment(body, userId) {
@@ -298,7 +394,7 @@ async function createPhoneAssignment(body, userId) {
     wa2ChatNormalCount, wa2ChatArchivedCount, wa2AppVariant,
     bitrixAccountId, chargerCableAssetId, chargerAdapterAssetId,
     expectedReturnAt, notes,
-    condition,
+    phoneCondition, condition,
   } = body;
 
   const assetIds = phoneAssetIds({ phoneAssetId, sim1AssetId, sim2AssetId, chargerCableAssetId, chargerAdapterAssetId });
@@ -348,6 +444,12 @@ async function createPhoneAssignment(body, userId) {
     await assertAccountsFree(accountIds, tx);
     await assertNumbersFree(phoneNumbers, tx);
 
+    // Handover condition of the phone and of every part (R4): the submitted value, else the asset's current one.
+    const submittedConditions = new Map([[phoneAssetId, phoneCondition]]);
+    for (const id of [sim1AssetId, sim2AssetId, chargerCableAssetId, chargerAdapterAssetId]) if (id) submittedConditions.set(id, condition);
+    const handover = await resolveHandoverConditions(tx, submittedConditions);
+    const conditionOf = (id) => handover.get(id).effective;
+
     const code = await nextAssignmentCode(tx);
     const now = new Date();
     const expReturn = expectedReturnAt ? new Date(expectedReturnAt) : new Date(now.getTime() + DEFAULT_RETURN_MONTHS * 30 * 24 * 3600 * 1000);
@@ -369,11 +471,11 @@ async function createPhoneAssignment(body, userId) {
 
     // Assignment items: PRIMARY + SIM1 + SIM2 + CHARGER_CABLE + CHARGER_ADAPTER (only for present assets).
     const items = [
-      { assetId: phoneAssetId, role: 'PRIMARY', conditionAtHandover: phoneAsset.condition },
-      ...(sim1AssetId ? [{ assetId: sim1AssetId, role: 'SIM1', conditionAtHandover: condition ?? 'GOOD' }] : []),
-      ...(sim2AssetId ? [{ assetId: sim2AssetId, role: 'SIM2', conditionAtHandover: condition ?? 'GOOD' }] : []),
-      ...(chargerCableAssetId ? [{ assetId: chargerCableAssetId, role: 'CHARGER_CABLE', conditionAtHandover: condition ?? 'GOOD' }] : []),
-      ...(chargerAdapterAssetId ? [{ assetId: chargerAdapterAssetId, role: 'CHARGER_ADAPTER', conditionAtHandover: condition ?? 'GOOD' }] : []),
+      { assetId: phoneAssetId, role: 'PRIMARY', conditionAtHandover: conditionOf(phoneAssetId) },
+      ...(sim1AssetId ? [{ assetId: sim1AssetId, role: 'SIM1', conditionAtHandover: conditionOf(sim1AssetId) }] : []),
+      ...(sim2AssetId ? [{ assetId: sim2AssetId, role: 'SIM2', conditionAtHandover: conditionOf(sim2AssetId) }] : []),
+      ...(chargerCableAssetId ? [{ assetId: chargerCableAssetId, role: 'CHARGER_CABLE', conditionAtHandover: conditionOf(chargerCableAssetId) }] : []),
+      ...(chargerAdapterAssetId ? [{ assetId: chargerAdapterAssetId, role: 'CHARGER_ADAPTER', conditionAtHandover: conditionOf(chargerAdapterAssetId) }] : []),
     ];
     await tx.assignmentItem.createMany({
       data: items.map((i) => ({ ...i, assignmentId: assignment.id, isActive: true })),
@@ -440,6 +542,9 @@ async function createPhoneAssignment(body, userId) {
       if (item.assetId === phoneAssetId) continue;
       await writeAssignedEntry(tx, assignment, item.assetId, snapshot, userId);
     }
+
+    // Write the handover conditions back to the assets that were handed over in a different condition (R4).
+    await writeBackHandoverConditions(tx, assignment, handover, userId);
 
     return { assignment, phoneDetail, items, snapshot };
   });
@@ -545,6 +650,9 @@ async function activate(assignmentId, userId) {
  * Flipping the PRIMARY asset to ASSIGNED, setting holder + room from the resolved
  * work identity, writing an ASSIGNED timeline snapshot (phoneDetail:null),
  * and honouring expectedReturnAt.
+ * Handover condition (Phase 8 R4): `conditionAtHandover` is the condition of the PRIMARY asset, `accessoryConditions`
+ * the one of each accessory; whatever is not submitted defaults to that asset's CURRENT condition. Every asset
+ * handed over in a different condition than it has is updated to it (+ an UPDATED timeline entry) in the same transaction.
  * @returns {Promise<{assignment, items, snapshot}>}
  */
 async function createGenericAssignment(body, userId) {
@@ -560,7 +668,7 @@ async function createGenericAssignment(body, userId) {
   // (assignment, asset) unique key and come back as a confusing 409.
   if (new Set(accessoryAssetIds).size !== accessoryAssetIds.length) throw badRequest('accessoryAssetIds lists the same asset more than once');
   if (accessoryAssetIds.includes(assetId)) throw badRequest('assetId cannot also be listed in accessoryAssetIds');
-  // Per-accessory handover condition (QA F-22). An accessory without an entry is handed over GOOD.
+  // Per-accessory handover condition (QA F-22). An accessory without an entry is handed over in its current condition.
   const accessoryCondition = new Map();
   for (const { assetId: id, condition: c } of accessoryConditions) {
     if (!accessoryAssetIds.includes(id)) throw badRequest(`accessoryConditions refers to asset ${id}, which is not in accessoryAssetIds`);
@@ -588,6 +696,12 @@ async function createGenericAssignment(body, userId) {
     const allAssetIds = [assetId, ...accessoryAssetIds];
     await assertAssetsFree(allAssetIds, tx);
 
+    // Handover condition of the primary asset and of every accessory (R4): the submitted value, else the asset's current one.
+    const submittedConditions = new Map([[assetId, conditionAtHandover]]);
+    for (const id of accessoryAssetIds) submittedConditions.set(id, accessoryCondition.get(id));
+    const handover = await resolveHandoverConditions(tx, submittedConditions);
+    const conditionOf = (id) => handover.get(id).effective;
+
     // workIdentityId (legacy) takes precedence; otherwise upsert the seat on-the-fly.
     const wid = workIdentityId ?? (workIdentity && (await resolveWorkIdentity(workIdentity, tx)).id);
 
@@ -612,8 +726,8 @@ async function createGenericAssignment(body, userId) {
 
     // Assignment items: PRIMARY + BUNDLED (accessories, each with its own handover condition).
     const items = [
-      { assignmentId: assignment.id, assetId, role: 'PRIMARY', conditionAtHandover: conditionAtHandover ?? 'GOOD', isActive: true },
-      ...accessoryAssetIds.map((id) => ({ assignmentId: assignment.id, assetId: id, role: 'BUNDLED', conditionAtHandover: accessoryCondition.get(id) ?? 'GOOD', isActive: true })),
+      { assignmentId: assignment.id, assetId, role: 'PRIMARY', conditionAtHandover: conditionOf(assetId), isActive: true },
+      ...accessoryAssetIds.map((id) => ({ assignmentId: assignment.id, assetId: id, role: 'BUNDLED', conditionAtHandover: conditionOf(id), isActive: true })),
     ];
     await tx.assignmentItem.createMany({
       data: items,
@@ -633,18 +747,25 @@ async function createGenericAssignment(body, userId) {
       await writeAssignedEntry(tx, assignment, item.assetId, snapshot, userId);
     }
 
+    // Write the handover conditions back to the assets that were handed over in a different condition (R4).
+    await writeBackHandoverConditions(tx, assignment, handover, userId);
+
     return { assignment, items, snapshot };
   });
 }
 
 module.exports = {
   DEFAULT_RETURN_MONTHS,
+  CONDITIONS,
   nextAssignmentCode,
   assertAssetsFree,
   assertAccountsFree,
   assertImeiFree,
   assertNumbersFree,
   assertPhonePartsValid,
+  resolveHandoverConditions,
+  writeBackHandoverConditions,
+  customFieldsByAsset,
   assignmentRoomWhere,
   assignmentScopeWhere,
   resolveWorkIdentity,

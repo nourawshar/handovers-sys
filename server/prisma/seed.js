@@ -26,6 +26,27 @@ async function upsertFields(categoryId, fields) {
   }
 }
 
+/** Create a ROOT category only when no root category of that name exists (case-insensitive, like the
+ *  categories API). Unlike upsertCategory this never rewrites an existing row: a DB that went through the
+ *  Excel import may already hold e.g. "Keyboards" with another code prefix (KBD) or a deactivated category,
+ *  and re-running the seed must leave all of that alone. */
+async function ensureCategory(name, codePrefix) {
+  const existing = await prisma.assetCategory.findFirst({ where: { name: { equals: name, mode: 'insensitive' }, parentId: null } });
+  return existing ?? prisma.assetCategory.create({ data: { name, parentId: null, kind: 'physical', codePrefix } });
+}
+
+/** Add custom columns that are not there yet (matched by key); existing columns — and whatever the owner
+ *  changed on them in the Categories page — are left untouched. Same field shape as upsertFields. */
+async function ensureFields(categoryId, fields) {
+  let i = 0;
+  for (const f of fields) {
+    i += 10;
+    const key = { categoryId_key: { categoryId, key: f.key } };
+    if (await prisma.assetCategoryField.findUnique({ where: key })) continue;
+    await prisma.assetCategoryField.create({ data: { categoryId, key: f.key, label: f.label, type: f.type ?? 'string', options: f.options ?? undefined, required: !!f.required, isSearchable: !!f.isSearchable, isIdentifier: !!f.isIdentifier, sortOrder: i } });
+  }
+}
+
 async function upsertAsset({ code, categoryId, phone, custom = {}, fieldMap, ...data }) {
   const asset = await prisma.asset.upsert({ where: { code }, create: { code, categoryId, ...data }, update: { ...data, categoryId } });
   if (phone) await prisma.phoneDetail.upsert({ where: { assetId: asset.id }, create: { assetId: asset.id, ...phone }, update: phone });
@@ -127,8 +148,13 @@ async function main() {
   const adapters = await upsertCategory('Charger Adapters', chargers.id, { kind: 'physical', codePrefix: 'ADP' });
   const printers = await upsertCategory('Printers', null, { kind: 'physical', codePrefix: 'PRN' });
   await upsertCategory('Networking', null, { kind: 'physical', codePrefix: 'NET' });
-  const accounts = await upsertCategory('Accounts', null, { kind: 'account', codePrefix: 'ACC' });
-  await upsertCategory('GMail-for-WhatsApp-Backup', accounts.id, { kind: 'account', codePrefix: 'ACC' });
+  // Phase 8 R1: the seed no longer creates the 'Accounts' / 'GMail-for-WhatsApp-Backup' categories — credentials
+  // live in the Account table (Accounts page), the categories were only noise in the asset form. Rows that an
+  // older seed already created stay where they are (the owner deletes them on the Categories page).
+  // Phase 8 R2: root physical categories for the "Add accessories" picker and for PC handovers, so a fresh DB works.
+  // Create-if-missing only: an imported DB may hold them already (e.g. Keyboards with prefix KBD) — never rewritten.
+  const computers = await ensureCategory('Computers', 'COM');
+  for (const [name, codePrefix] of [['Monitors', 'MON'], ['Mouse', 'MOU'], ['Keyboards', 'KEY'], ['Headphones', 'HDP']]) await ensureCategory(name, codePrefix);
 
   await upsertFields(phones.id, [
     { key: 'purchase_date', label: 'Purchase date', type: 'date' },
@@ -143,12 +169,17 @@ async function main() {
     { key: 'plan', label: 'Plan', type: 'string' },
     { key: 'status', label: 'Status', type: 'select', options: ['ACTIVE', 'SUSPENDED', 'DEACTIVATED'] },
   ]);
-  await upsertFields(laptops.id, [
+  // Hardware columns printed on the handover receipt (processor, RAM, storage, GPU) — same keys and labels for
+  // PCs and laptops. `gpu` is new for Laptops; the other four are what Laptops already had (re-upserted unchanged).
+  const hardwareFields = [
     { key: 'model', label: 'Model', isSearchable: true },
     { key: 'cpu', label: 'CPU' },
     { key: 'ram_gb', label: 'RAM (GB)', type: 'number' },
     { key: 'disk', label: 'Disk' },
-  ]);
+    { key: 'gpu', label: 'GPU' },
+  ];
+  await upsertFields(laptops.id, hardwareFields);
+  await ensureFields(computers.id, hardwareFields); // Computers may pre-exist (import) with columns of its own: only add what is missing
   await upsertFields(printers.id, [
     { key: 'model', label: 'Model', isSearchable: true }, { key: 'pages_delivered', label: 'Pages delivered', type: 'number' },
   ]);
