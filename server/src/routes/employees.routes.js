@@ -66,11 +66,15 @@ function isDup(e) {
   return e?.code === 'P2002';
 }
 
-/** TEAM_LEADER → own room; CALL_CENTER_MANAGER → all CALLCENTER rooms; else unrestricted. */
-function scopeWhere(user, f) {
+/** TEAM_LEADER → own room; CALL_CENTER_MANAGER → all CALLCENTER rooms; else unrestricted.
+ *  The optional roomId filter narrows WITHIN that scope (a scoped user asking for another room gets
+ *  nothing, never the rows of their own scope — QA F-29). Shared by the list and the detail (QA F-04). */
+function scopeWhere(user, f = {}) {
   const s = roomScope(user);
-  if (s) return s.allCallCenter ? { room: { teamType: 'CALLCENTER' } } : { roomId: s.roomId };
-  return f.roomId ? { roomId: f.roomId } : {};
+  const byRoom = f.roomId ? { roomId: f.roomId } : null;
+  if (!s) return byRoom ?? {};
+  const inScope = s.allCallCenter ? { room: { teamType: 'CALLCENTER' } } : { roomId: s.roomId };
+  return byRoom ? { AND: [inScope, byRoom] } : inScope;
 }
 
 router.get(
@@ -98,8 +102,9 @@ router.get(
   read,
   validate({ params: idParams }),
   asyncHandler(async (req, res) => {
-    const emp = await prisma.employee.findUnique({
-      where: { id: req.params.id },
+    // Same room scope as the list: an employee outside the caller's scope does not exist for them (404).
+    const emp = await prisma.employee.findFirst({
+      where: { AND: [{ id: req.params.id }, scopeWhere(req.user)] },
       include: {
         ...detailInclude,
         assignments: {

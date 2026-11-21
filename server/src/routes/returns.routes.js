@@ -21,18 +21,40 @@ const write = requireCapability('assignments:write'); // Admin only
 
 const idParams = z.object({ id: z.uuid() });
 
-/** TEAM_LEADER must only reach assignments whose room they manage (fail closed when unscoped). */
+/**
+ * An assignment's room is its seat's room, else its employee's room (workIdentity.roomId ??
+ * employee.roomId) — the rule assignments.routes.js applies to the detail view. This is its database
+ * filter (the timeline endpoint); loadScoped() below applies the same rule to the loaded assignment.
+ *   TEAM_LEADER          → that room must be theirs
+ *   CALL_CENTER_MANAGER  → it must be a CALLCENTER room
+ * Both fail closed.
+ */
 function scoped(scope) {
-  return scope ? { workIdentity: { roomId: scope.roomId } } : {};
+  if (!scope) return {};
+  const room = scope.allCallCenter ? { teamType: 'CALLCENTER' } : { id: scope.roomId };
+  return {
+    OR: [
+      { workIdentity: { room } }, // the seat has a room and it is in scope
+      { OR: [{ workIdentity: { is: null } }, { workIdentity: { roomId: null } }], employee: { room } }, // no seat room → the employee's room
+    ],
+  };
 }
 
-/** Full hydrated assignment for return flow + TEAM_LEADER room guard. */
+/** The room an assignment belongs to (seat room, else employee room) with its team type, or null. */
+function assignmentRoom(assignment) {
+  const holder = assignment.workIdentity?.roomId ? assignment.workIdentity : assignment.employee;
+  return holder?.roomId ? { id: holder.roomId, teamType: holder.room?.teamType } : null;
+}
+
+/** Full hydrated assignment for return flow + TEAM_LEADER / CALL_CENTER_MANAGER room guard (404 outside the scope). */
 async function loadScoped(id, req) {
   const assignment = await loadAssignment(id);
   if (!assignment) throw notFound('Assignment');
   const scope = roomScope(req.user);
-  if (scope && (assignment.workIdentity?.roomId ?? assignment.employee?.roomId) !== scope.roomId) {
-    throw notFound('Assignment');
+  if (scope) {
+    const room = assignmentRoom(assignment);
+    const inScope = room && (scope.allCallCenter ? room.teamType === 'CALLCENTER' : room.id === scope.roomId);
+    if (!inScope) throw notFound('Assignment');
   }
   return assignment;
 }
@@ -77,13 +99,22 @@ router.get(
 );
 
 // POST /api/v1/assignments/:id/return — submit return-state; compares + closes out (contract §8.2)
+const condition = z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED']);
 const returnBody = z.object({
-  returnCondition: z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED'].map((v) => v)).nullish(),
+  returnCondition: condition.nullish(),
   returnNotes: z.string().trim().max(1000).nullish(),
+  /** Phase 7 #5 — condition each OTHER involved asset (bundled accessory / SIM / charger) comes back in. */
+  itemConditions: z
+    .array(z.object({ assetId: z.uuid(), condition }).strict())
+    .max(30)
+    .refine((list) => new Set(list.map((i) => i.assetId)).size === list.length, 'itemConditions must not repeat an assetId')
+    .nullish(),
   return: z
-    .object(
-      Object.fromEntries(comparableKeys().map((k) => [k, z.union([z.string().trim(), z.number(), z.boolean(), z.null()]).optional()])),
-    )
+    .object({
+      ...Object.fromEntries(comparableKeys().map((k) => [k, z.union([z.string().trim(), z.number(), z.boolean(), z.null()]).optional()])),
+      // The comparison ranks this against the handover condition, so it must be a real condition.
+      condition: condition.nullish(),
+    })
     .strict()
     .nullish(),
 });
@@ -94,23 +125,35 @@ router.post(
   validate({ params: idParams, body: z.object({ ...returnBody.shape, return: returnBody.shape.return }) }),
   asyncHandler(async (req, res) => {
     const assignment = await loadScoped(req.params.id, req);
-    assertReturnable(assignment); // 404, and 409 for non-ACTIVE (incl. already RETURNED → idempotent guard)
-    const { returnCondition, returnNotes, return: returnState } = req.body;
-    const result = await applyReturn(assignment, { returnCondition, returnNotes, returnState }, req.user);
+    assertReturnable(assignment); // 404, and 409 for non-ACTIVE (fast path; applyReturn re-checks atomically inside its transaction)
+    const { returnCondition, returnNotes, itemConditions, return: returnState } = req.body;
+    const result = await applyReturn(assignment, { returnCondition, returnNotes, returnState, itemConditions }, req.user);
+    const discrepancies = result.comparison.filter((c) => c.isDiscrepancy);
     await audit(req, 'assignment.return', 'Assignment', assignment.id, {
       assignmentCode: assignment.assignmentCode,
       hasDiscrepancies: result.hasDiscrepancies,
-      discrepancyFields: result.comparison.filter((c) => c.isDiscrepancy).map((c) => c.fieldKey),
+      discrepancyFields: discrepancies.map((c) => c.fieldKey),
+      unreturnedItems: result.unreturnedItems,
     });
     res.json({
       data: {
         assignmentId: assignment.id,
         assignmentCode: assignment.assignmentCode,
         status: 'RETURNED',
-        returnedAt: new Date(),
+        returnedAt: result.returnedAt,
         hasDiscrepancies: result.hasDiscrepancies,
-        discrepancies: result.comparison,
+        // F-21: `discrepancies` holds ONLY the rows flagged isDiscrepancy; the full field-by-field
+        // list (flagged or not) is `comparison`, which is what the return screen renders.
+        discrepancies,
+        comparison: result.comparison,
+        // F-05 / F-06: required items that did NOT come back — [{ kind, code, name }], kind being
+        // SIM1 | SIM2 | CHARGER_CABLE | CHARGER_ADAPTER | BITRIX. They stay bound to the employee
+        // (assets ASSIGNED with their holder, the Bitrix account keeps its assignment).
+        unreturnedItems: result.unreturnedItems,
         photos: photoSets(assignment), // BE-1: handover vs return images
+        // Phase 7 #5: what the return did to each returned asset's own condition/status,
+        // primary first — [{ assetId, code, name, role, from, to, changed, status }].
+        assetConditions: result.assetConditions,
       },
     });
   }),

@@ -92,7 +92,13 @@ test('RBAC: team leader only sees assets of own room', async () => {
   const admin = await as('admin');
   const all = (await admin.req('GET', '/assets?pageSize=100')).body;
   assert.ok(all.meta.total > list.length);
-  const other = all.data.find((a) => a.room?.code === 'TR3');
+  // Pick a TR3 asset through the room filter, not from the first page of the unfiltered newest-first list:
+  // on a DB with >99 newer assets the seeded TR3 asset (PHN-000005, the oldest row) is not on that page.
+  const tr3 = (await admin.req('GET', '/rooms')).body.data.find((r) => r.code === 'TR3');
+  assert.ok(tr3, 'TR3 room seeded');
+  const other = (await admin.req('GET', `/assets?roomId=${tr3.id}&pageSize=1`)).body.data[0];
+  assert.ok(other, 'at least one asset is in TR3');
+  assert.equal(other.room?.code, 'TR3');
   assert.equal((await t.req('GET', `/assets/${other.id}`)).status, 404);
 });
 
@@ -265,11 +271,15 @@ test('return flow: return-form → return (discrepancies) → timeline → doubl
   // return-form on non-ACTIVE → 409
   assert.equal((await admin.req('GET', `/assignments/${id}/return-form`)).status, 409);
 
-  // 5) assets released back to AVAILABLE, holder/room cleared, Bitrix account released
+  // 5) the phone goes back to AVAILABLE and loses its holder but keeps its last known room (F-26). The Bitrix
+  //    account was dropped from the return (bitrixAccountId: null → CRITICAL) and the charger cable too, so —
+  //    like a missing charger — it stays bound to the assignment instead of being freed (F-05 / F-06).
+  const tr1 = await prisma.room.findUnique({ where: { code: 'TR1' }, select: { id: true } });
   const phone = await prisma.asset.findUnique({ where: { code: 'PHN-000001' }, select: { status: true, currentHolderEmployeeId: true, roomId: true } });
-  assert.equal(phone.status, 'AVAILABLE'); assert.equal(phone.currentHolderEmployeeId, null); assert.equal(phone.roomId, null);
+  assert.equal(phone.status, 'AVAILABLE'); assert.equal(phone.currentHolderEmployeeId, null); assert.equal(phone.roomId, tr1.id);
   const bitrix = await prisma.account.findFirst({ where: { identifier: 'sofia@clinic.bitrix24.com' }, select: { currentAssignmentId: true } });
-  assert.equal(bitrix.currentAssignmentId, null);
+  assert.equal(bitrix.currentAssignmentId, id);
+  assert.deepEqual(ret.body.data.unreturnedItems.map((i) => i.kind), ['CHARGER_CABLE', 'BITRIX']);
 
   // 6) RBAC: TEAM_LEADER read-only & room-scoped; POST requires Admin
   const tlUser = await as('tl.tr1');
@@ -290,7 +300,8 @@ test('BE-9: assets list items expose customFields with phone_number (SIM dots bu
   const expectedNumber = sim.customValues.find((v) => v.fieldId === numField.id)?.value;
 
   // list (paginated) must include customFields.phone_number — no dots / no "SIM1 number required"
-  const list = await admin.req('GET', `/assets?categoryId=${simsCat.id}&pageSize=100`);
+  // narrowed by the SIM's code, so the lookup does not depend on where the row sits in a large category
+  const list = await admin.req('GET', `/assets?categoryId=${simsCat.id}&code=${encodeURIComponent(sim.code)}&pageSize=100`);
   assert.equal(list.status, 200);
   const item = list.body.data.find((a) => a.id === sim.id);
   assert.ok(item, 'SIM asset present in category-filtered list');
@@ -558,9 +569,17 @@ test('phase5: generic assignment + work-identity upsert idempotency + account-by
     const prisma = require('../src/db');
     const admin = await as('admin');
 
-    // Fixtures from seed
-    const computersCat = await prisma.assetCategory.findFirst({ where: { name: 'Computers' }, select: { id: true } });
-    const monitorsCat = await prisma.assetCategory.findFirst({ where: { name: 'Monitors' }, select: { id: true } });
+    // Fixtures: the Computers / Monitors categories only exist after the Excel import, so create them
+    // when they are missing (fresh seed) instead of assuming them.
+    const ensureCategory = async (name, codePrefix) => {
+      const found = await prisma.assetCategory.findFirst({ where: { name }, select: { id: true } });
+      if (found) return found;
+      const r = await admin.req('POST', '/asset-categories', { body: { name, codePrefix } });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      return { id: r.body.data.id };
+    };
+    const computersCat = await ensureCategory('Computers', 'COM');
+    const monitorsCat = await ensureCategory('Monitors', 'MON');
     const cc = await prisma.departmentTeam.findFirst({ where: { name: 'Call Center' }, select: { id: true } });
     const tr1 = await prisma.room.findFirst({ where: { code: 'TR1' }, select: { id: true } });
     const ayse = await prisma.employee.findFirst({ where: { fullName: 'Ayse Celik' }, select: { id: true } });
@@ -659,11 +678,14 @@ test('BE-19: return without required charger cable/adapter - items tracked, inve
   // 4) double-return -> 409
   assert.equal((await admin.req('POST', `/assignments/${id}/return`, { body: { returnCondition: 'GOOD', return: {} } })).status, 409);
 
-  // 5) inventory: primary released, but the MISSING required charger items stay ASSIGNED (not returned to inventory)
+  // 5) inventory: primary released (holder cleared, last known room kept — F-26), but the MISSING required
+  //    charger items stay ASSIGNED (not returned to inventory) and are listed as unreturned
+  const tr1 = await prisma.room.findUnique({ where: { code: 'TR1' }, select: { id: true } });
   const phone = await prisma.asset.findUnique({ where: { code: 'PHN-000001' }, select: { status: true, currentHolderEmployeeId: true, roomId: true } });
   assert.equal(phone.status, 'AVAILABLE');
   assert.equal(phone.currentHolderEmployeeId, null);
-  assert.equal(phone.roomId, null);
+  assert.equal(phone.roomId, tr1.id);
+  assert.deepEqual(ret.body.data.unreturnedItems.map((i) => i.kind), ['CHARGER_CABLE', 'CHARGER_ADAPTER']);
   const cable = await prisma.asset.findUnique({ where: { code: 'CBL-000001' }, select: { status: true } });
   const adapter = await prisma.asset.findUnique({ where: { code: 'ADP-000001' }, select: { status: true } });
   assert.equal(cable.status, 'ASSIGNED', 'missing charger cable must NOT be released to AVAILABLE');
@@ -681,4 +703,247 @@ test('BE-19: return without required charger cable/adapter - items tracked, inve
   assert.equal(bitrix.currentAssignmentId, null);
 
   await prisma.$disconnect();
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * Phase 7 — #5 a return writes the asset's own condition; #4 assignment detail carries each
+ * item's asset photos. API-only (uses fresh assets in seeded categories, no direct DB access).
+ * ------------------------------------------------------------------------------------------ */
+const p7 = {
+  async ctx(admin) {
+    const emp = (await admin.req('GET', '/employees?pageSize=1')).body.data[0];
+    const cats = (await admin.req('GET', '/asset-categories')).body.flat;
+    return { emp, cat: (name) => cats.find((c) => c.name === name) };
+  },
+  /** A fresh GOOD / AVAILABLE asset. */
+  async asset(admin, category, label) {
+    const r = await admin.req('POST', '/assets', { body: { categoryId: category.id, name: `P7 ${label} ${Date.now()}`, condition: 'GOOD' } });
+    assert.equal(r.status, 201);
+    assert.equal(r.body.data.condition, 'GOOD');
+    assert.equal(r.body.data.status, 'AVAILABLE');
+    return r.body.data;
+  },
+  /** Generic assignment (single asset, or a GENERAL bundle with accessories); returns the created detail. */
+  async assign(admin, emp, asset, accessories = []) {
+    const r = await admin.req('POST', '/assignments/generic', {
+      body: { type: accessories.length ? 'GENERAL' : 'LAPTOP', employeeId: emp.id, assetId: asset.id, accessoryAssetIds: accessories.map((x) => x.id), conditionAtHandover: 'GOOD' },
+    });
+    assert.equal(r.status, 201);
+    return r.body.data;
+  },
+  async getAsset(admin, id) {
+    const r = await admin.req('GET', `/assets/${id}`);
+    assert.equal(r.status, 200);
+    return r.body.data;
+  },
+};
+
+test('Phase 7 #5: return writes asset.condition (DAMAGED stays AVAILABLE, DISPOSED → DISPOSED) + UPDATED timeline entry', async () => {
+  const admin = await as('admin');
+  const { emp, cat } = await p7.ctx(admin);
+
+  // Condition → resulting asset status: only DISPOSED changes the status rule.
+  const cases = [['DAMAGED', 'AVAILABLE'], ['POOR', 'AVAILABLE'], ['FAIR', 'AVAILABLE'], ['DISPOSED', 'DISPOSED']];
+  for (const [returned, expectedStatus] of cases) {
+    const asset = await p7.asset(admin, cat('Laptops'), `return ${returned}`);
+    const a = await p7.assign(admin, emp, asset);
+    assert.equal((await p7.getAsset(admin, asset.id)).status, 'ASSIGNED');
+
+    const ret = await admin.req('POST', `/assignments/${a.id}/return`, { body: { returnCondition: returned, returnNotes: `p7 ${returned}` } });
+    assert.equal(ret.status, 200, JSON.stringify(ret.body));
+    // the response reports what happened to the asset
+    assert.deepEqual(
+      ret.body.data.assetConditions.map(({ assetId, role, from, to, changed, status }) => ({ assetId, role, from, to, changed, status })),
+      [{ assetId: asset.id, role: 'PRIMARY', from: 'GOOD', to: returned, changed: true, status: expectedStatus }],
+    );
+
+    // GET the asset: new condition, status by the rule, released from the holder
+    const after = await p7.getAsset(admin, asset.id);
+    assert.equal(after.condition, returned, `asset.condition after returning ${returned}`);
+    assert.equal(after.status, expectedStatus, `asset.status after returning ${returned}`);
+    assert.equal(after.currentHolder, null);
+    assert.equal(after.currentHolderEmployeeId, null);
+
+    // asset history: exactly one UPDATED entry { field, from, to, assignmentCode } tied to this assignment
+    const updated = after.timelineEntries.filter((e) => e.eventType === 'UPDATED');
+    assert.equal(updated.length, 1, 'one UPDATED timeline entry on the asset');
+    assert.deepEqual(updated[0].snapshot, { field: 'condition', from: 'GOOD', to: returned, assignmentCode: a.assignmentCode });
+    assert.equal(updated[0].assignmentId, a.id);
+    assert.ok(after.timelineEntries.some((e) => e.eventType === 'RETURNED'), 'RETURNED entry still written');
+
+    // the assignment shows the same: return condition on the item + the UPDATED entry on its timeline
+    const detail = (await admin.req('GET', `/assignments/${a.id}`)).body.data;
+    assert.equal(detail.status, 'RETURNED');
+    assert.equal(detail.items.find((i) => i.role === 'PRIMARY').returnCondition, returned);
+    const tl = (await admin.req('GET', `/assignments/${a.id}/timeline?pageSize=20&eventType=UPDATED`)).body.data;
+    assert.equal(tl.length, 1);
+    assert.equal(tl[0].assetId, asset.id);
+  }
+
+  // Returned in the same condition → condition untouched and NO UPDATED entry (nothing changed).
+  const same = await p7.asset(admin, cat('Laptops'), 'return GOOD');
+  const sa = await p7.assign(admin, emp, same);
+  const r = await admin.req('POST', `/assignments/${sa.id}/return`, { body: { returnCondition: 'GOOD' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.assetConditions[0].changed, false);
+  const sameAfter = await p7.getAsset(admin, same.id);
+  assert.equal(sameAfter.condition, 'GOOD');
+  assert.equal(sameAfter.status, 'AVAILABLE');
+  assert.equal(sameAfter.timelineEntries.filter((e) => e.eventType === 'UPDATED').length, 0);
+
+  // No returnCondition at all → the asset keeps its condition (and is still released).
+  const keep = await p7.asset(admin, cat('Laptops'), 'return unspecified');
+  const ka = await p7.assign(admin, emp, keep);
+  assert.equal((await admin.req('POST', `/assignments/${ka.id}/return`, { body: {} })).status, 200);
+  const keepAfter = await p7.getAsset(admin, keep.id);
+  assert.equal(keepAfter.condition, 'GOOD');
+  assert.equal(keepAfter.status, 'AVAILABLE');
+});
+
+test('Phase 7 #5: bundle return — itemConditions set each accessory’s condition; accessories are released; bad itemConditions → 400', async () => {
+  const admin = await as('admin');
+  const { emp, cat } = await p7.ctx(admin);
+  const primary = await p7.asset(admin, cat('Laptops'), 'bundle primary');
+  const printer = await p7.asset(admin, cat('Printers'), 'bundle printer');
+  const cable = await p7.asset(admin, cat('Charger Cables'), 'bundle cable');
+  const stranger = await p7.asset(admin, cat('Laptops'), 'bundle stranger');
+  const a = await p7.assign(admin, emp, primary, [printer, cable]);
+  const returnUrl = `/assignments/${a.id}/return`;
+
+  // Invalid itemConditions are rejected before anything is written (the assignment stays ACTIVE).
+  const notInvolved = await admin.req('POST', returnUrl, { body: { returnCondition: 'GOOD', itemConditions: [{ assetId: stranger.id, condition: 'DAMAGED' }] } });
+  assert.equal(notInvolved.status, 400);
+  const dup = await admin.req('POST', returnUrl, { body: { itemConditions: [{ assetId: printer.id, condition: 'POOR' }, { assetId: printer.id, condition: 'GOOD' }] } });
+  assert.equal(dup.status, 400);
+  const badEnum = await admin.req('POST', returnUrl, { body: { itemConditions: [{ assetId: printer.id, condition: 'BROKEN' }] } });
+  assert.equal(badEnum.status, 400);
+  assert.equal((await p7.getAsset(admin, stranger.id)).condition, 'GOOD', 'unrelated asset untouched');
+  assert.equal((await admin.req('GET', `/assignments/${a.id}`)).body.data.status, 'ACTIVE', 'rejected returns do not close the assignment');
+
+  // Primary comes back FAIR, printer DAMAGED, cable has no entry (keeps its condition).
+  const ret = await admin.req('POST', returnUrl, { body: { returnCondition: 'FAIR', itemConditions: [{ assetId: printer.id, condition: 'DAMAGED' }] } });
+  assert.equal(ret.status, 200, JSON.stringify(ret.body));
+  const byAsset = Object.fromEntries(ret.body.data.assetConditions.map((c) => [c.assetId, c]));
+  assert.equal(ret.body.data.assetConditions[0].assetId, primary.id, 'primary listed first');
+  assert.deepEqual([byAsset[primary.id].from, byAsset[primary.id].to, byAsset[primary.id].changed], ['GOOD', 'FAIR', true]);
+  assert.deepEqual([byAsset[printer.id].from, byAsset[printer.id].to, byAsset[printer.id].changed], ['GOOD', 'DAMAGED', true]);
+  assert.deepEqual([byAsset[cable.id].from, byAsset[cable.id].to, byAsset[cable.id].changed], ['GOOD', 'GOOD', false]);
+
+  const [pAfter, prAfter, cAfter] = await Promise.all([primary, printer, cable].map((x) => p7.getAsset(admin, x.id)));
+  assert.equal(pAfter.condition, 'FAIR');
+  assert.equal(prAfter.condition, 'DAMAGED');
+  assert.equal(cAfter.condition, 'GOOD');
+  for (const x of [pAfter, prAfter, cAfter]) {
+    // bundled accessories travel with the primary: released to inventory, holder cleared
+    assert.equal(x.status, 'AVAILABLE');
+    assert.equal(x.currentHolder, null);
+  }
+  const updatedOn = (x) => x.timelineEntries.filter((e) => e.eventType === 'UPDATED').map((e) => `${e.snapshot.from}>${e.snapshot.to}`);
+  assert.deepEqual(updatedOn(pAfter), ['GOOD>FAIR']);
+  assert.deepEqual(updatedOn(prAfter), ['GOOD>DAMAGED']);
+  assert.deepEqual(updatedOn(cAfter), []);
+  assert.ok(prAfter.timelineEntries.some((e) => e.eventType === 'RETURNED'), 'accessory has a RETURNED entry, not a "missing" NOTE');
+
+  // Per-item return condition is stored on the assignment items and visible in the detail.
+  const detail = (await admin.req('GET', `/assignments/${a.id}`)).body.data;
+  const rc = Object.fromEntries(detail.items.map((i) => [i.asset.id, i.returnCondition]));
+  assert.deepEqual(rc, { [primary.id]: 'FAIR', [printer.id]: 'DAMAGED', [cable.id]: null });
+  assert.ok(detail.items.every((i) => i.isActive === false));
+});
+
+test('Phase 7 #5: phone return with the return-form payload — PHN-000001 comes back DAMAGED, UPDATED entry, SIM/charger released unchanged', async () => {
+  const { execFileSync } = require('node:child_process');
+  const path = require('node:path');
+  execFileSync('node', [path.join(__dirname, '..', 'scripts', 'fixture-return.cjs')], { cwd: path.join(__dirname, '..'), stdio: 'pipe' });
+  const admin = await as('admin');
+  const asg = (await admin.req('GET', '/assignments?q=A-900001&pageSize=1')).body.data[0];
+  assert.equal(asg.assignmentCode, 'A-900001');
+  const phone = async () => (await admin.req('GET', `/assets/${asg.assetId}`)).body.data;
+  assert.equal((await phone()).condition, 'GOOD', 'fixture phone starts GOOD');
+
+  // Same shape the web return form sends: top-level returnCondition + return{…, condition} with the
+  // handover labels for Bitrix / charger dropdowns (so nothing is flagged missing).
+  const ret = await admin.req('POST', `/assignments/${asg.id}/return`, {
+    body: {
+      returnCondition: 'DAMAGED',
+      returnNotes: 'dropped',
+      return: {
+        condition: 'DAMAGED', sim1Number: '905369700889', bitrixAccountId: 'sofia@clinic.bitrix24.com',
+        chargerCableAssetId: 'CBL-000001 — USB-C charger cable', chargerAdapterAssetId: 'ADP-000001 — 15W USB adapter',
+      },
+    },
+  });
+  assert.equal(ret.status, 200, JSON.stringify(ret.body));
+  const ac = ret.body.data.assetConditions;
+  assert.equal(ac[0].assetId, asg.assetId, 'primary first');
+  assert.deepEqual(ac.slice(0, 1).map((c) => [c.role, c.from, c.to, c.changed, c.status]), [['PRIMARY', 'GOOD', 'DAMAGED', true, 'AVAILABLE']]);
+  assert.deepEqual(ac.slice(1).map((c) => c.role).sort(), ['CHARGER_ADAPTER', 'CHARGER_CABLE', 'SIM1']);
+  assert.ok(ac.slice(1).every((c) => c.changed === false && c.status === 'AVAILABLE'), 'SIM/chargers released, conditions untouched');
+
+  const after = await phone();
+  assert.equal(after.condition, 'DAMAGED');
+  assert.equal(after.status, 'AVAILABLE');
+  assert.equal(after.currentHolder, null);
+  const updated = after.timelineEntries.filter((e) => e.eventType === 'UPDATED');
+  assert.equal(updated.length, 1);
+  assert.deepEqual(updated[0].snapshot, { field: 'condition', from: 'GOOD', to: 'DAMAGED', assignmentCode: 'A-900001' });
+
+  // Leave the seeded sample phone as the seed made it (the shared dev data should not keep a DAMAGED phone).
+  assert.equal((await admin.req('PATCH', `/assets/${asg.assetId}`, { body: { condition: 'GOOD' } })).status, 200);
+});
+
+test('Phase 7 #4: assignment detail returns each item asset’s own photos as [{id,type,url}]', async () => {
+  const admin = await as('admin');
+  const { emp, cat } = await p7.ctx(admin);
+  const laptop = await p7.asset(admin, cat('Laptops'), 'photo laptop');
+  const printer = await p7.asset(admin, cat('Printers'), 'photo printer');
+  const created = await p7.assign(admin, emp, laptop, [printer]);
+
+  // Photo arrays are always present, empty while the assets have no pictures (create response + detail).
+  for (const items of [created.items, (await admin.req('GET', `/assignments/${created.id}`)).body.data.items]) {
+    assert.equal(items.length, 2);
+    assert.ok(items.every((i) => Array.isArray(i.asset.photos) && i.asset.photos.length === 0));
+  }
+
+  // Give the laptop a FRONT + BACK picture and the printer a CONDITION one (the assets' own photos).
+  const upload = async (assetId, type) => {
+    const fd = new FormData(); fd.append('type', type); fd.append('photos', new Blob([PNG], { type: 'image/png' }), `${type}.png`);
+    const r = await admin.req('POST', `/assets/${assetId}/photos`, { form: fd });
+    assert.equal(r.status, 201);
+    return r.body.data[0];
+  };
+  const front = await upload(laptop.id, 'FRONT');
+  const back = await upload(laptop.id, 'BACK');
+  const cond = await upload(printer.id, 'CONDITION');
+
+  const res = await admin.req('GET', `/assignments/${created.id}`);
+  assert.equal(res.status, 200);
+  const detail = res.body.data;
+  const item = (assetId) => detail.items.find((i) => i.asset.id === assetId);
+
+  // items[].asset.photos[] = [{ id, type, url }] — url is the existing photo-file endpoint
+  assert.deepEqual(item(laptop.id).asset.photos.map(({ id, type, url }) => ({ id, type, url })), [
+    { id: front.id, type: 'FRONT', url: `/api/v1/photos/${front.id}/file` },
+    { id: back.id, type: 'BACK', url: `/api/v1/photos/${back.id}/file` },
+  ]);
+  assert.deepEqual(item(printer.id).asset.photos.map(({ id, type, url }) => ({ id, type, url })), [
+    { id: cond.id, type: 'CONDITION', url: `/api/v1/photos/${cond.id}/file` },
+  ]);
+  const file = await fetch(`${BASE}${item(laptop.id).asset.photos[0].url}`, { headers: { Cookie: `access_token=${admin.cookies.access_token}` } });
+  assert.equal(file.status, 200);
+  assert.equal(file.headers.get('content-type'), 'image/png');
+
+  // Existing fields are unchanged: asset id/code/name, handover condition, assignment-level photos…
+  assert.equal(item(laptop.id).asset.code, laptop.code);
+  assert.equal(item(laptop.id).asset.name, laptop.name);
+  assert.equal(item(laptop.id).conditionAtHandover, 'GOOD');
+  assert.ok(Array.isArray(detail.photos) && detail.photos.length === 0, 'assignment-level photos stay separate from asset photos');
+  assert.equal(detail.asset.id, laptop.id);
+  assert.equal(detail.employee.id, emp.id);
+  // …and the items now identify themselves (id / role / assetId) so clients can address them.
+  assert.deepEqual(detail.items.map((i) => i.role).sort(), ['BUNDLED', 'PRIMARY']);
+  assert.ok(detail.items.every((i) => i.id && i.assetId === i.asset.id));
+
+  // Tidy up: return the bundle so these assets are not left ASSIGNED (RBAC tests inspect who holds what).
+  assert.equal((await admin.req('POST', `/assignments/${created.id}/return`, { body: { returnCondition: 'GOOD' } })).status, 200);
 });

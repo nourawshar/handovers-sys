@@ -47,6 +47,24 @@ const fieldPatch = fieldBase.omit({ key: true, type: true }).partial().strict();
 
 const fieldOrder = [{ sortOrder: 'asc' }, { label: 'asc' }];
 
+/** 409 when another category already has this name at the same level (case-insensitive: "Laptops" ==
+ *  "LAPTOPS") or this code prefix (asset codes are built from it). Only the values being set are checked,
+ *  so unrelated edits of a legacy duplicate keep working. `id` excludes the category being edited. */
+async function assertCategoryUnique({ id, name, parentId, codePrefix }) {
+  const other = id ? { id: { not: id } } : {};
+  if (name !== undefined) {
+    const dup = await prisma.assetCategory.findFirst({
+      where: { parentId: parentId ?? null, name: { equals: name, mode: 'insensitive' }, ...other },
+      select: { id: true, name: true },
+    });
+    if (dup) throw conflict(`A category named "${dup.name}" already exists at this level`, { field: 'name', categoryId: dup.id });
+  }
+  if (codePrefix !== undefined) {
+    const dup = await prisma.assetCategory.findFirst({ where: { codePrefix, ...other }, select: { id: true, name: true } });
+    if (dup) throw conflict(`Code prefix "${codePrefix}" is already used by category "${dup.name}"`, { field: 'codePrefix', categoryId: dup.id });
+  }
+}
+
 /** GET /asset-categories — flat list with parentId + nested children; ?includeFields=true */
 router.get(
   '/',
@@ -82,6 +100,7 @@ router.post(
       if (!parent) throw badRequest('parentId does not exist');
       if (parent.parentId) throw badRequest('Only one level of subcategories is supported');
     }
+    await assertCategoryUnique({ name: req.body.name, parentId: req.body.parentId, codePrefix: req.body.codePrefix });
     const data = await prisma.assetCategory.create({ data: { ...req.body, parentId: req.body.parentId ?? null } });
     await audit(req, 'category.create', 'AssetCategory', data.id, { name: data.name });
     res.status(201).json({ data });
@@ -103,6 +122,16 @@ router.patch(
       if (!parent) throw badRequest('parentId does not exist');
       if (parent.parentId) throw badRequest('Only one level of subcategories is supported');
     }
+    // Uniqueness is re-checked only for what actually changes (name / level / prefix), against everyone else.
+    const b = req.body;
+    const renamed = b.name !== undefined && b.name !== existing.name;
+    const moved = b.parentId !== undefined && (b.parentId ?? null) !== existing.parentId;
+    await assertCategoryUnique({
+      id,
+      name: renamed || moved ? (b.name ?? existing.name) : undefined,
+      parentId: b.parentId !== undefined ? b.parentId : existing.parentId,
+      codePrefix: b.codePrefix !== undefined && b.codePrefix !== existing.codePrefix ? b.codePrefix : undefined,
+    });
     const data = await prisma.assetCategory.update({ where: { id }, data: req.body });
     await audit(req, 'category.update', 'AssetCategory', id, { changes: Object.keys(req.body) });
     res.json({ data });

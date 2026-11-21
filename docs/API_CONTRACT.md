@@ -55,7 +55,7 @@ Standard `code` values:
 | `FORBIDDEN` | 403 | Authenticated but role/scope denies |
 | `NOT_FOUND` | 404 | Resource (or parent) does not exist |
 | `VALIDATION_ERROR` | 400 | Zod schema failed; `details` = per-field errors (field name → message) |
-| `CONFLICT` | 409 | Unique / dual-active / in-use violation (e.g. asset already ASSIGNED, duplicate IMEI) |
+| `CONFLICT` | 409 | Unique / dual-active / in-use violation (e.g. asset not available for handover, duplicate IMEI, duplicate category name/prefix, phone number in use). `error.details` MAY carry machine-readable context (see the endpoint) |
 | `DECRYPT_NOT_ALLOWED` | 403 | Non-Admin tried to decrypt an account |
 | `INTERNAL` | 500 | Unhandled server error (no internals leaked) |
 
@@ -80,7 +80,7 @@ JSON field names are **exactly** the camelCase column names from §5. Examples d
 | `AssetCategoryField.type` | `string`, `number`, `date`, `boolean`, `select`, `textarea` |
 | `Asset.condition` | `NEW`, `GOOD`, `FAIR`, `POOR`, `DAMAGED`, `DISPOSED` |
 | `Asset.status` | `AVAILABLE`, `ASSIGNED`, `RETURNED`, `DISPOSED`, `IN_REPAIR` |
-| `User.role` | `ADMIN`, `MANAGER`, `TEAM_LEADER` |
+| `User.role` | `ADMIN`, `MANAGER`, `TEAM_LEADER`, `CALL_CENTER_MANAGER` |
 | `Employee.status` | `ACTIVE`, `LEFT`, `ON_LEAVE` |
 | `DepartmentTeam.type` | `HOSPITAL`, `CALLCENTER` |
 | `Assignment.type` | `PHONE`, `LAPTOP`, `PRINTER`, `SIM`, `GENERAL` |
@@ -213,10 +213,12 @@ List categories, each with its nested `children` (subcategories) and `fields`.
   "kind": "physical"
 }
 ```
-**Response 201 / `data`:** category object (as in 4.1). Errors: `400 VALIDATION_ERROR`, `409 CONFLICT` (name+parent duplicate).
+**Response 201 / `data`:** category object (as in 4.1). `codePrefix` (2-5 letters, upper-cased, default `AST`) is also accepted.
+**Errors:** `400 VALIDATION_ERROR`; `409 CONFLICT` when the `name` already exists at the same level (same `parentId`, case-insensitive: "Laptops" == "LAPTOPS") or the `codePrefix` is already used by any category (any level). `error.details = { "field": "name" | "codePrefix", "categoryId": "<id of the existing category>" }`.
 
 ### 4.3 PATCH `/asset-categories/:id` (Admin)
-Partial: `isActive`, `name`, `kind` allowed. **Response 200 / `data`:** category object.
+Partial: `isActive`, `name`, `kind`, `parentId`, `codePrefix` allowed. **Response 200 / `data`:** category object.
+**Errors:** same `409 CONFLICT` + `details { field, categoryId }` as 4.2. Uniqueness is re-checked only for values that actually change (a rename, a move to another level, a new `codePrefix`), so unrelated edits of a legacy duplicate keep working.
 
 ### 4.4 DELETE `/asset-categories/:id` (Admin)
 Soft-deactivate. **Blocked (`409 CONFLICT`) if any asset or child category references it.** **Response 204.** (Blocked = returns 409, does NOT hard-delete.)
@@ -341,12 +343,18 @@ Partial: `name`, `serialNumber`, `qty`, `condition`, `roomId`, `status`, `notes`
 **Response 201 / `data`:** `{ "photos": [ { "id":"uuid","type":"FRONT","url":"/uploads/...","mimeType":"image/jpeg","sizeBytes":12345 } ] }`.
 **Errors:** `400 VALIDATION_ERROR` (bad mime/oversize).
 
+### 4.13 GET `/photos/:id/file`
+Streams a stored image (auth required, capability `inventory:read`). **Response 200:** the image bytes with the stored `Content-Type`, `Content-Disposition: inline`, `Cache-Control: private, max-age=3600`. This is the target of every photo `url` (`/api/v1/photos/:id/file`).
+**Visibility:** a photo is exactly as visible as its parent. An asset photo follows the asset detail rule (asset room, else the holder's room); an assignment photo follows the assignment rule of 7.1 (seat room, else employee room). `ADMIN`/`MANAGER` = everything; `TEAM_LEADER` = own room; `CALL_CENTER_MANAGER` = every `CALLCENTER` room. An asset with no room and no holder is visible to `ADMIN`/`MANAGER` only. Account photos are never shown to scoped users.
+**Errors:** `401 UNAUTHORIZED`; `404 NOT_FOUND` for a photo outside the caller's scope (never 403, existence is not leaked), for an unknown id, or when the file is missing on disk.
+
 ---
 
 ## 5. Employees, Departments, Rooms, Work Identities
 
 ### 5.1 GET `/employees`
 List (scoped; paginated). Query: `q`, `departmentTeamId`, `roomId`, `status`, `page`, `pageSize`.
+Scope: `TEAM_LEADER` = employees of their own room; `CALL_CENTER_MANAGER` = employees of every `CALLCENTER` room; `ADMIN`/`MANAGER` = all. `?roomId=` narrows **inside** the caller's scope and never widens it (a scoped user asking for another room gets an empty list).
 **Response 200 — `data` item:**
 ```json
 {
@@ -382,7 +390,7 @@ List (scoped; paginated). Query: `q`, `departmentTeamId`, `roomId`, `status`, `p
 Partial, fields as above incl. `status`. **Response 200 / `data`:** employee.
 
 ### 5.4 GET `/employees/:id`
-Detail + device history. **Response 200 / `data`:** employee object plus:
+Detail + device history. Uses the **same scope as the list (5.1)**: an employee outside the caller's scope answers `404 NOT_FOUND` (existence is not leaked) — a Team Leader of another room, and a Team Leader / Call-centre manager asking for an employee with no (call-centre) room. **Response 200 / `data`:** employee object plus:
 ```json
 {
   "...employee fields...",
@@ -519,6 +527,7 @@ Multipart proof docs; same rules as asset photos (§4.12). **Response 201 / `dat
 
 ### 7.1 GET `/assignments`
 List/filter (paginated). Query: `type`, `status`, `employeeId`, `workIdentityId`, `roomId`, `q` (assignmentCode/assetCode/IMEI/employee name), `page`, `pageSize`.
+**Room rule (one rule for list, detail and photos):** an assignment's room is its work identity's (seat) room, else the employee's room. `TEAM_LEADER` = assignments in their own room; `CALL_CENTER_MANAGER` = assignments in any `CALLCENTER` room; `ADMIN`/`MANAGER` = all. `?roomId=` narrows inside the caller's scope (same seat-else-employee rule) and never widens it.
 **Response 200 — `data` item (summary, no nested detail):**
 ```json
 {
@@ -541,7 +550,7 @@ List/filter (paginated). Query: `type`, `status`, `employeeId`, `workIdentityId`
 ```
 
 ### 7.2 GET `/assignments/:id`
-Detail with items + phone detail. **Response 200 / `data`:**
+Detail with items + phone detail. Same room rule and scope as 7.1: an assignment outside the caller's scope answers `404 NOT_FOUND`, so a row returned by the list can always be opened. `items[]` expose `id`, `assetId`, `role`, `isActive`, `conditionAtHandover`, `returnCondition` and `asset`. **Response 200 / `data`:**
 ```json
 {
   "id": "uuid",
@@ -556,7 +565,7 @@ Detail with items + phone detail. **Response 200 / `data`:**
   "notes": null,
   "createdById": "uuid",
   "items": [
-    { "id":"uuid", "assetId":"uuid", "role":"PRIMARY", "conditionAtHandover":"GOOD", "returnCondition": null,
+    { "id":"uuid", "assetId":"uuid", "role":"PRIMARY", "isActive": true, "conditionAtHandover":"GOOD", "returnCondition": null,
       "asset": { "id":"uuid", "code":"PHN-000123", "name":"Samsung Galaxy A12" } }
   ],
   "phoneDetail": {
@@ -660,7 +669,46 @@ Submit a **complete** phone assignment in one call (creates DRAFT then activates
 }
 ```
 **Response 201 / `data`:** activated assignment (as 7.2, `status: "ACTIVE"`). Note: the README names this `POST /assignments/phone` — implement it as creating + activating atomically; intermediate DRAFT is internal.
-**Errors:** `400 VALIDATION_ERROR` (all required §3.2 fields), `409 CONFLICT` (dual-active asset/IMEI/account).
+Optional extra body fields: `workIdentity` (`{name, departmentTeamId?, roomId?}`, find-or-create instead of `workIdentityId`), `expectedReturnAt`, `condition` (condition of the phone at handover). The body is strict (unknown keys → 400).
+
+**Errors:** `400 VALIDATION_ERROR` (all required §3.2 fields), `409 CONFLICT` (see 7.6.1).
+
+#### 7.6.1 Validation and availability rules (apply to `/assignments/phone` and `/assignments/generic`)
+Order: body schema → ids → business rules → availability (inside the transaction).
+
+1. **Ids are validated first (400).** An unknown id answers `400 "<field> does not exist"`; an id of the wrong category answers `400 "<field> must be an asset of the \"<category>\" category (...)"`. This replaces the former FK-violation 409. Fields and required categories: `sim1AssetId`, `sim2AssetId` = "SIM Cards"; `chargerCableAssetId` = "Charger Cables"; `chargerAdapterAssetId` = "Charger Adapters"; `phoneAssetId` = "Phones". Unknown `employeeId`, `workIdentityId`, `bitrixAccountId` also answer 400.
+2. **Every involved asset must be handover-ready (409).** The phone, SIM 1/2, charger cable/adapter (generic: the primary and every accessory) must each have `status = AVAILABLE`, no current holder, and be in no active assignment. Otherwise `409 CONFLICT`:
+   `Asset "<code>" (<name>) is not available for handover: status <S>[, held by <employee>][, in active assignment <A-code>]`
+   `error.details = { assetId, assetCode, status, heldBy, assignmentCode }`.
+3. **Concurrency.** Concurrent requests for the same asset or phone number: exactly one succeeds (201), the rest get `409`, never `5xx`.
+4. **Phone numbers (one namespace).** Numbers are compared digits-only (`+90 536 970 08 89` == `905369700889`) in a single namespace shared by SIM and WhatsApp numbers. A number already used by another **ACTIVE** assignment answers `409 CONFLICT`:
+   `Phone number "<n>" is already in use (SIM 1 | SIM 2 | WhatsApp 1 | WhatsApp 2) by active assignment A-000012`, or
+   `WhatsApp account "<n>" is already in use by active assignment A-000012`.
+   `error.details = { number, slot?, assignmentCode }`. The number is free again once that assignment is `RETURNED`.
+5. **Other 400s:** `sim1Number` ≠ `wa1PhoneNumber`, or `sim2Number` ≠ `wa2PhoneNumber` ("the SIM number is the single source"); slot-1 number equals slot-2 number; the same asset in two slots; body `imei` differing from the IMEI recorded on the phone asset (or supplied for a phone that has none).
+
+### 7.6a POST `/assignments/generic` (Admin)
+Create **and activate** a non-phone assignment atomically (types `LAPTOP`, `PRINTER`, `SIM`, `GENERAL`, `COMPUTERS`, `MONITORS`, `MOUSE`, `KEYBOARDS`, `HEADPHONES`; a Phones-category asset must go through 7.6). The body is strict.
+**Request:**
+```json
+{
+  "type": "LAPTOP",
+  "employeeId": "uuid",
+  "workIdentityId": null,
+  "workIdentity": null,
+  "assetId": "uuid",
+  "accessoryAssetIds": ["uuid", "uuid"],
+  "accessoryConditions": [ { "assetId": "uuid", "condition": "FAIR" } ],
+  "conditionAtHandover": "GOOD",
+  "expectedReturnAt": null,
+  "notes": null
+}
+```
+- `assetId` = PRIMARY item and keeps the top-level `conditionAtHandover` (required; `NEW|GOOD|FAIR|POOR|DAMAGED|DISPOSED`). Each accessory becomes a bundled item.
+- `accessoryAssetIds` (max 20) and `accessoryConditions` (max 20, strict `{assetId, condition}` objects) may each be omitted or `null`.
+- Each `accessoryConditions[].assetId` must be listed in `accessoryAssetIds` and appear once; its `condition` becomes that accessory's `conditionAtHandover`. Accessories without an entry default to `GOOD`.
+- **Response 201 / `data`:** activated assignment (as 7.2, `status: "ACTIVE"`).
+- **Errors:** the availability rule (409) and id rules (400) of 7.6.1 apply. Additional `400`: duplicate ids in `accessoryAssetIds`; `assetId` also listed as an accessory; unknown accessory ids (message lists them); a Phones-category asset; an `accessoryConditions` entry that is not in `accessoryAssetIds` or is duplicated.
 
 ### 7.7 GET `/assignments/draft/:id`
 Resume an unfinished DRAFT assignment. **Response 200 / `data`:** assignment with `status: "DRAFT"` (as 7.2). **Errors:** `404 NOT_FOUND`, `409 CONFLICT` if not DRAFT.
@@ -862,7 +910,23 @@ Query: `roomId?`.
 
 ### 10.6 GET `/reports/:id/export`
 `id` = id of a report definition (`who-has-what`, `condition`, `backup-staleness`, `outstanding-assignments`, `room-composition`) or its slug. Pass the same query filters. **Response 200:** file download (CSV or XLSX; `Accept: text/csv` or `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`). Not JSON.
-**Errors:** `403 FORBIDDEN` (Team Leader cannot export).
+**Errors:** `403 FORBIDDEN` (Team Leader / Call-centre manager cannot export); `404 NOT_FOUND` (unknown report).
+
+**CSV format** (UTF-8 with BOM, CRLF line endings, header row = the humanised column names of the JSON table):
+- **Dates** are ISO-8601 UTC without milliseconds: `YYYY-MM-DDTHH:MM:SSZ` (e.g. `2026-11-21T07:51:30Z`). Never a JS `Date.toString()` form such as `... GMT+0000 (Coordinated Universal Time)`.
+- **Formula-injection guard:** a text cell whose first character is `=`, `+`, `-`, `@`, TAB or CR is prefixed with a single quote (`'=SUM(A1)`), so spreadsheets keep it inert. Real numbers (e.g. a negative count) and booleans are untouched.
+- Cells containing `,`, `"` or line breaks are RFC-4180 quoted.
+
+**Pagination applies to exports (known behaviour).** The export honours `page` / `pageSize` exactly like the JSON report: without them a CSV/XLSX holds at most the first **25 rows** (`pageSize` max 100). Example: 30 active assignments → 25 CSV rows, 30 with `pageSize=100`. **Open question:** a silently truncated export may not be intended; product/backend must decide whether `/reports/:id/export` should ignore pagination. Until decided, clients that need a full export must pass `pageSize=100` and page through.
+
+---
+
+### 10.7 GET `/audit-logs` (Admin only)
+Paginated, newest first (`createdAt desc`). Capability `audit:read` = `ADMIN` only (others `403`). Query: `page`, `pageSize`, `actorId` (uuid), `action` (substring, case-insensitive), `targetType` (substring, case-insensitive), `targetId` (uuid), `q` (substring of action or targetType), `from`, `to`.
+- `from`: inclusive lower bound on `createdAt`. A date-only value (`YYYY-MM-DD`) means 00:00:00 UTC of that day.
+- `to`: a **date-only** value (`YYYY-MM-DD`) means *through the end of that day (UTC)* (`createdAt < next day 00:00 UTC`); a full timestamp stays an exact **inclusive** bound.
+- An unparseable `from`/`to` → `400 VALIDATION_ERROR`.
+**Response 200:** `{ "data": [ { "id", "action", "targetType", "targetId", "createdAt", "...", "actor": { "id", "fullName", "username" } } ], "meta": { page envelope as 1.3 } }` (log row columns are returned as stored; `actor` is the acting user).
 
 ---
 
@@ -875,7 +939,7 @@ Query: `roomId?`.
 | Export | ✅ | ✅ | ❌ |
 | Credentials (decrypt) | ✅ | masked | ‑ |
 
-Team Leader queries are filtered server-side by `roomId` (the value from their User/scope). Manager is read-only (writes → `403 FORBIDDEN`). Middleware decodes JWT → sets `req.user { id, role, roomScope }` → route guards enforce.
+Team Leader queries are filtered server-side by `roomId` (the value from their User/scope). `CALL_CENTER_MANAGER` is scoped to every `CALLCENTER` room (employees, assets, assignments, photos, reports) and is read-only, like Manager, but cannot export. Out-of-scope single entities answer `404 NOT_FOUND`, not 403. Manager is read-only (writes → `403 FORBIDDEN`). Middleware decodes JWT → sets `req.user { id, role, roomScope }` → route guards enforce.
 
 ---
 

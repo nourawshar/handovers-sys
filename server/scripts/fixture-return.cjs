@@ -99,6 +99,10 @@ async function main() {
     // Mark assets ASSIGNED + holder, matching what BE-1's activate step does.
     await tx.asset.updateMany({ where: { id: { in: [phone.id, sim1.id, cable.id, adapter.id] }, status: 'AVAILABLE' }, data: { status: 'ASSIGNED', currentHolderEmployeeId: employee.id, roomId: wi.roomId } });
 
+    // A return now writes the returned condition onto the asset itself (Phase 7 #5): put the
+    // fixture phone back to its handover condition so every re-run starts from the same state.
+    await tx.asset.update({ where: { id: phone.id }, data: { condition: 'GOOD' } });
+
     // Bind the Bitrix account (in-use release target on return).
     await tx.account.update({ where: { id: bitrix.id }, data: { currentAssignmentId: a.id } });
 

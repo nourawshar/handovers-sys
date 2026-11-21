@@ -30,37 +30,39 @@ const workIdentityInput = z.object({
 });
 
 /** TEAM_LEADER must only reach assignments whose room they manage (fail closed when unscoped).
- *  CALL_CENTER_MANAGER reaches assignments in any CALLCENTER room (workIdentity room, or the
- *  employee's room when there is no work identity — matching the report convention). */
-function scoped(scope) {
-  if (!scope) return {};
-  if (scope.allCallCenter) {
-    return {
-      OR: [
-        { workIdentity: { room: { teamType: 'CALLCENTER' } } },
-        { workIdentity: { is: null }, employee: { room: { teamType: 'CALLCENTER' } } },
-      ],
-    };
-  }
-  return { workIdentity: { roomId: scope.roomId } };
+ *  CALL_CENTER_MANAGER reaches assignments in any CALLCENTER room. An assignment's room is its work
+ *  identity's (seat) room, else the employee's room — one rule, shared with the detail guard and the
+ *  photo guard through assignment.service. */
+const scoped = svc.assignmentScopeWhere;
+
+/** Full hydrated assignment for detail + TEAM_LEADER / CALL_CENTER_MANAGER room guard.
+ *  The guard is part of the query (same `scoped()` as the list), so a list row is always openable. */
+async function loadScoped(id, req, include) {
+  const assignment = await prisma.assignment.findFirst({ where: { AND: [{ id }, scoped(roomScope(req.user))] }, include });
+  if (!assignment) throw notFound('Assignment');
+  return assignment;
 }
 
-/** Full hydrated assignment for detail + TEAM_LEADER / CALL_CENTER_MANAGER room guard. */
-async function loadScoped(id, req, include) {
-  const assignment = await prisma.assignment.findUnique({ where: { id }, include });
-  if (!assignment) throw notFound('Assignment');
-  const scope = roomScope(req.user);
-  if (scope) {
-    const roomId = assignment.workIdentity?.roomId ?? assignment.employee?.roomId;
-    if (scope.allCallCenter) {
-      // CALL_CENTER_MANAGER: the assignment's room must be a CALLCENTER room.
-      const room = await prisma.room.findUnique({ where: { id: roomId ?? '00000000-0000-0000-0000-000000000000' }, select: { teamType: true } });
-      if (!room || room.teamType !== 'CALLCENTER') throw notFound('Assignment');
-    } else if (roomId !== scope.roomId) {
-      throw notFound('Assignment');
-    }
-  }
-  return assignment;
+/** An item's asset incl. its OWN photos (not the assignment's): id/type only — `url` is added by
+ *  withItemAssetPhotoUrls() so every response exposes the same shape as the other photo lists. */
+const itemAssetSelect = {
+  id: true,
+  code: true,
+  name: true,
+  photos: { orderBy: { createdAt: 'asc' }, select: { id: true, type: true } },
+};
+
+/** items[].asset.photos → [{ id, type, url }] (url = the existing photo file endpoint). */
+function withItemAssetPhotoUrls(assignment) {
+  return {
+    ...assignment,
+    items: (assignment.items ?? []).map((it) => ({
+      ...it,
+      asset: it.asset
+        ? { ...it.asset, photos: (it.asset.photos ?? []).map((p) => ({ ...p, url: `/api/v1/photos/${p.id}/file` })) }
+        : it.asset,
+    })),
+  };
 }
 
 const detailInclude = {
@@ -69,7 +71,7 @@ const detailInclude = {
   asset: { select: { id: true, code: true, name: true } },
   items: {
     include: {
-      asset: { select: { id: true, code: true, name: true } },
+      asset: { select: itemAssetSelect },
     },
   },
   phoneDetail: {
@@ -101,7 +103,11 @@ const phoneDetailInclude = {
   asset: { select: { id: true, code: true, name: true } },
   items: {
     select: {
-      asset: { select: { id: true, code: true, name: true } },
+      id: true,
+      assetId: true,
+      role: true,
+      isActive: true,
+      asset: { select: itemAssetSelect },
       conditionAtHandover: true,
       returnCondition: true,
     },
@@ -149,7 +155,7 @@ router.get(
     if (f.status) and.push({ status: f.status });
     if (f.employeeId) and.push({ employeeId: f.employeeId });
     if (f.workIdentityId) and.push({ workIdentityId: f.workIdentityId });
-    if (f.roomId) and.push({ workIdentity: { roomId: f.roomId } });
+    if (f.roomId) and.push(svc.assignmentRoomWhere({ id: f.roomId })); // same seat-else-employee rule as the scope
     if (f.q)
       and.push({
         OR: [
@@ -190,7 +196,7 @@ router.get(
   read,
   validate({ params: idParams }),
   asyncHandler(async (req, res) => {
-    const assignment = await loadScoped(req.params.id, req, phoneDetailInclude);
+    const assignment = withItemAssetPhotoUrls(await loadScoped(req.params.id, req, phoneDetailInclude));
     res.json({
       data: {
         ...assignment,
@@ -225,7 +231,7 @@ router.post(
     const assignment = await svc.createDraft(b, req.user.id);
     await audit(req, 'assignment.create', 'Assignment', assignment.id, { assignmentCode: assignment.assignmentCode, status: 'DRAFT' });
     const full = await prisma.assignment.findUnique({ where: { id: assignment.id }, include: detailInclude });
-    res.status(201).json({ data: full });
+    res.status(201).json({ data: withItemAssetPhotoUrls(full) });
   }),
 );
 
@@ -281,7 +287,7 @@ router.post(
     const { assignment, phoneDetail, items } = await svc.createPhoneAssignment(b, req.user.id);
     await audit(req, 'assignment.create', 'Assignment', assignment.id, { assignmentCode: assignment.assignmentCode, status: 'ACTIVE', type: 'PHONE' });
     const full = await prisma.assignment.findUnique({ where: { id: assignment.id }, include: detailInclude });
-    res.status(201).json({ data: full });
+    res.status(201).json({ data: withItemAssetPhotoUrls(full) });
   }),
 );
 
@@ -295,6 +301,8 @@ const genericBody = z
     workIdentity: workIdentityInput.nullish(),
     assetId: z.uuid(),
     accessoryAssetIds: z.array(z.uuid()).max(20).nullish(),
+    /** Optional per-accessory handover condition; an accessory without an entry is handed over GOOD (QA F-22). */
+    accessoryConditions: z.array(z.object({ assetId: z.uuid(), condition }).strict()).max(20).nullish(),
     conditionAtHandover: condition,
     expectedReturnAt: dateish.nullish(),
     notes: z.string().trim().max(5000).nullish(),
@@ -314,7 +322,7 @@ router.post(
     const { assignment } = await svc.createGenericAssignment(b, req.user.id);
     await audit(req, 'assignment.create', 'Assignment', assignment.id, { assignmentCode: assignment.assignmentCode, status: 'ACTIVE', type: assignment.type });
     const full = await prisma.assignment.findUnique({ where: { id: assignment.id }, include: detailInclude });
-    res.status(201).json({ data: full });
+    res.status(201).json({ data: withItemAssetPhotoUrls(full) });
   }),
 );
 

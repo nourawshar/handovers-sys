@@ -11,6 +11,18 @@ const router = express.Router();
 // ADMIN only — the audit trail is privileged (CHANGE 8 / BE-17).
 router.use(requireCapability('audit:read'));
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 24 * 3600 * 1000;
+
+/** `createdAt` upper bound for the `to` filter. A date-only value ("2026-11-21") parses as 00:00 UTC and
+ *  would silently drop that whole day, so it means "through the end of that day (UTC)" (QA F-17);
+ *  a full timestamp stays an inclusive bound. */
+function createdAtUpTo(to) {
+  const t = to.trim();
+  const d = new Date(t);
+  return DATE_ONLY.test(t) ? { lt: new Date(d.getTime() + DAY_MS) } : { lte: d };
+}
+
 const listQuery = z.object({
   ...paginationQuery,
   actorId: z.uuid().optional(),
@@ -34,7 +46,7 @@ router.get(
     if (f.targetType) and.push({ targetType: { contains: f.targetType, mode: 'insensitive' } });
     if (f.targetId) and.push({ targetId: f.targetId });
     if (f.from) and.push({ createdAt: { gte: new Date(f.from) } });
-    if (f.to) and.push({ createdAt: { lte: new Date(f.to) } });
+    if (f.to) and.push({ createdAt: createdAtUpTo(f.to) });
     if (f.q)
       and.push({
         OR: [
