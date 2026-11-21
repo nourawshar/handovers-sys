@@ -6,7 +6,7 @@ import {
   normWorkIdentity, unwrap,
 } from './normalize'
 import type {
-  Account, AccountSavePayload, Asset, AssignmentDetail, AuditLogEntry, Category, CategoryField, Department, DepartmentSavePayload, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
+  Account, AccountSavePayload, Asset, AssignmentDetail, AuditLogEntry, Category, CategoryField, CategoryFieldSavePayload, CategorySavePayload, Department, DepartmentSavePayload, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
   ReportRow, ReportSlug, ReturnResult, Room, TimelineEntry, User, UserSavePayload,
 } from './types'
 
@@ -46,6 +46,52 @@ export function useCategoryFields(categoryId?: string) {
       const raw = await api.get(`/asset-categories/${categoryId}/fields`)
       return normList(raw, normField).items.sort((a: CategoryField, b: CategoryField) => a.sortOrder - b.sortOrder)
     },
+  })
+}
+
+function invalidateCategories(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['categories'] })
+  qc.invalidateQueries({ queryKey: ['category-fields'] })
+}
+
+export function useSaveCategory(id?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: CategorySavePayload) => {
+      const raw = id ? await api.patch<R>(`/asset-categories/${id}`, p) : await api.post<R>('/asset-categories', p)
+      return unwrap(raw) as R
+    },
+    onSuccess: () => invalidateCategories(qc),
+  })
+}
+
+export function useDeleteCategory() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => { await api.del(`/asset-categories/${id}`) },
+    onSuccess: () => invalidateCategories(qc),
+  })
+}
+
+/** Create (no fieldId) or update (fieldId) a custom column of a category. */
+export function useSaveCategoryField(categoryId?: string, fieldId?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: CategoryFieldSavePayload): Promise<CategoryField> => {
+      const raw = fieldId
+        ? await api.patch<R>(`/asset-categories/fields/${fieldId}`, p)
+        : await api.post<R>(`/asset-categories/${categoryId}/fields`, p)
+      return normField(unwrap(raw) as R)
+    },
+    onSuccess: () => invalidateCategories(qc),
+  })
+}
+
+export function useDeleteCategoryField() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (fieldId: string) => { await api.del(`/asset-categories/fields/${fieldId}`) },
+    onSuccess: () => invalidateCategories(qc),
   })
 }
 

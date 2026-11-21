@@ -88,6 +88,7 @@ export function normCategory(c: R): Category {
     parentId: c.parentId ?? null,
     kind: c.kind ?? 'physical',
     isActive: c.isActive !== false,
+    codePrefix: c.codePrefix ?? undefined,
     fields: Array.isArray(c.fields) ? c.fields.map(normField).sort((a: CategoryField, b: CategoryField) => a.sortOrder - b.sortOrder) : undefined,
   }
 }

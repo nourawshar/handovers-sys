@@ -59,6 +59,7 @@ export interface Category {
   parentId: string | null
   kind: 'physical' | 'digital' | 'account' | string
   isActive: boolean
+  codePrefix?: string
   fields?: CategoryField[]
 }
 
@@ -235,6 +236,27 @@ export interface Department {
   employeeCount?: number
   workIdentityCount?: number
   childCount?: number
+}
+
+/** POST /asset-categories and PATCH /asset-categories/:id. */
+export interface CategorySavePayload {
+  name?: string
+  parentId?: string | null
+  kind?: 'physical' | 'digital' | 'account'
+  codePrefix?: string
+  isActive?: boolean
+}
+
+/** POST /asset-categories/:id/fields (all) and PATCH /asset-categories/fields/:fieldId (no key/type). */
+export interface CategoryFieldSavePayload {
+  key?: string
+  label?: string
+  type?: FieldType
+  options?: string[] | null
+  required?: boolean
+  isSearchable?: boolean
+  isIdentifier?: boolean
+  sortOrder?: number
 }
 
 /** Write payload for POST /departments and PATCH /departments/:id (BE-9). */
