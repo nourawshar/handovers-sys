@@ -253,7 +253,7 @@ export default function AssetFormPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Category" required error={errors.categoryId?.message}>
               <Controller control={control} name="categoryId" render={({ field }) => (
-                <SearchableSelect ariaLabel="Category" options={(categories.data ?? []).filter((c) => c.isActive).map((c) => ({ value: c.id, label: `${c.parentId ? '— ' : ''}${c.name}` }))} value={field.value ?? ''} onChange={field.onChange} disabled={editing} placeholder="Type to filter categories…" selectPlaceholder="Select category…" />
+                <SearchableSelect ariaLabel="Category" options={(categories.data ?? []).filter((c) => c.isActive && (c.kind === 'physical' || c.id === (existing.data?.asset.categoryId ?? categoryId))).map((c) => ({ value: c.id, label: `${c.parentId ? '— ' : ''}${c.name}` }))} value={field.value ?? ''} onChange={field.onChange} disabled={editing} placeholder="Type to filter categories…" selectPlaceholder="Select category…" />
               )} />
             </Field>
             {isSim ? (

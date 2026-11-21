@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { ExternalLink, X } from 'lucide-react'
 import { useAsset } from '@/api/hooks'
+import { LastConditionLine, PhotoHistory } from './AssetDetailPage'
 import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, ConditionBadge, ErrorState, Spinner, StatusBadge } from '@/components/ui'
 
@@ -86,11 +87,12 @@ export default function AssetDrawer({ assetId, onClose }: { assetId: string; onC
                 <Row label="Notes">{asset.notes}</Row>
                 <Row label="Created">{fmtDate(asset.createdAt, true)}</Row>
               </dl>
+              <LastConditionLine check={asset.lastConditionCheck} />
             </div>
 
             {asset.photos.length > 0 && (
               <div className="card p-5">
-                <h2 className="mb-3 text-sm font-semibold text-slate-900">Photos</h2>
+                <h2 className="mb-3 text-sm font-semibold text-slate-900">Asset photos</h2>
                 <div className="grid grid-cols-2 gap-3">
                   {asset.photos.map((p) => (
                     <div key={p.id} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
@@ -101,6 +103,8 @@ export default function AssetDrawer({ assetId, onClose }: { assetId: string; onC
                 </div>
               </div>
             )}
+
+            <PhotoHistory history={asset.photoHistory ?? []} assetCode={asset.code} />
 
             <div className="flex justify-end">
               <Link to={`/assets/${asset.id}`}>

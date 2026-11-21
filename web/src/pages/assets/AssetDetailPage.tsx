@@ -4,7 +4,7 @@ import { ArrowLeft, Camera, Pencil, Search, Trash2 } from 'lucide-react'
 import { useAsset, useAssetTimeline, useCategories, useDeleteAsset, useUploadAssetPhotos } from '@/api/hooks'
 import type { DeleteAssetResult } from '@/api/hooks'
 import AssignmentDrawer from './AssignmentDrawer'
-import type { Asset, TimelineEntry } from '@/api/types'
+import type { Asset, LastConditionCheck, PhotoHistoryEntry, TimelineEntry } from '@/api/types'
 import { useAuthStore } from '@/store/auth'
 import { can } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
@@ -48,7 +48,7 @@ function PhotosPanel({ asset, canUpload }: { asset: Asset; canUpload: boolean })
   return (
     <div className="card p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-900">Photos</h2>
+        <h2 className="text-sm font-semibold text-slate-900">Asset photos</h2>
         {canUpload && (
           <div className="flex items-center gap-2">
             <Select value={type} onChange={(e) => setType(e.target.value as typeof type)} className="!w-auto !py-1.5 text-xs" aria-label="Photo type">
@@ -76,6 +76,75 @@ function PhotosPanel({ asset, canUpload }: { asset: Asset; canUpload: boolean })
       )}
       {preview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setPreview(null)} role="dialog" aria-modal="true">
+          <img src={preview} alt="Preview" className="max-h-full max-w-full rounded-lg" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+const SOURCE_TEXT: Record<string, string> = { created: 'at creation', delivery: 'at delivery', return: 'at return', manual: 'manual edit' }
+
+/** "Condition last recorded: Fair — at return A-000012 on 12 Nov 2026" (R4/R5). */
+export function LastConditionLine({ check }: { check?: LastConditionCheck | null }) {
+  if (!check) return null
+  const src = SOURCE_TEXT[check.source] ?? check.source
+  return (
+    <p className="mt-3 text-xs text-slate-500">
+      Condition last recorded: <b className="text-slate-700">{titleCase(check.condition)}</b> — {src}
+      {check.assignmentCode ? ` ${check.assignmentCode}` : ''}{check.at ? ` on ${fmtDate(check.at)}` : ''}
+    </p>
+  )
+}
+
+function ThumbRow({ label, photos, code, onPreview }: { label: string; photos: Asset['photos']; code: string; onPreview: (url: string) => void }) {
+  if (photos.length === 0) return null
+  return (
+    <div className="mt-3">
+      <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+      <div className="flex flex-wrap gap-2">
+        {photos.map((p) => (
+          <button key={p.id} onClick={() => onPreview(p.url)} className="group relative h-20 w-20 overflow-hidden rounded-lg border border-slate-200 bg-slate-100" aria-label={`${titleCase(p.type)} photo ${label.toLowerCase()}`}>
+            <img src={p.url} alt={`${p.type} of ${code}`} loading="lazy" className="h-full w-full object-cover transition group-hover:scale-105" />
+            <span className="absolute bottom-0.5 left-0.5"><Badge>{titleCase(p.type)}</Badge></span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Per-assignment photo timeline (R5). `onOpenAssignment` is optional (the drawer has none). */
+export function PhotoHistory({ history, assetCode, onOpenAssignment }: { history: PhotoHistoryEntry[]; assetCode: string; onOpenAssignment?: (assignmentId: string) => void }) {
+  const [preview, setPreview] = useState<string | null>(null)
+  return (
+    <div className="card p-5">
+      <h2 className="mb-3 text-sm font-semibold text-slate-900">Photo history</h2>
+      {history.length === 0 ? (
+        <EmptyState title="No handover photos yet" hint="Photos taken at delivery or return will appear here, grouped per assignment." />
+      ) : (
+        <ol className="space-y-4">
+          {history.map((h) => (
+            <li key={h.assignmentId} className="rounded-lg border border-slate-200 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {onOpenAssignment
+                  ? <button onClick={() => onOpenAssignment(h.assignmentId)} className="font-mono text-sm font-semibold text-brand-700 hover:underline">{h.assignmentCode}</button>
+                  : <span className="font-mono text-sm font-semibold text-brand-700">{h.assignmentCode}</span>}
+                <StatusBadge value={h.status} />
+                {h.role && <Badge>{titleCase(h.role)}</Badge>}
+              </div>
+              <p className="mt-1 text-sm text-slate-700">{h.employeeName || '—'}</p>
+              <p className="text-xs text-slate-500">
+                assigned {fmtDate(h.assignedAt)} → {h.returnedAt ? `returned ${fmtDate(h.returnedAt)}` : 'still with employee'}
+              </p>
+              <ThumbRow label="At handover" photos={h.handover} code={assetCode} onPreview={setPreview} />
+              <ThumbRow label="At return" photos={h.return} code={assetCode} onPreview={setPreview} />
+            </li>
+          ))}
+        </ol>
+      )}
+      {preview && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4" onClick={() => setPreview(null)} role="dialog" aria-modal="true">
           <img src={preview} alt="Preview" className="max-h-full max-w-full rounded-lg" />
         </div>
       )}
@@ -134,6 +203,12 @@ function TimelineItem({ e, onOpenAssignment }: { e: TimelineEntry; onOpenAssignm
         {e.workIdentity ? <> · identity <b>{e.workIdentity.name}</b></> : null}
         {e.assignmentId ? <> · <button onClick={() => onOpenAssignment(e.assignmentId!)} className="text-brand-700 hover:underline">assignment</button></> : null}
       </p>
+      {e.eventType === 'UPDATED' && e.snapshot?.field === 'condition' && (
+        <p className="mt-1 text-sm text-slate-800">
+          Condition changed <b>{titleCase(String(e.snapshot.from ?? '—'))}</b> → <b>{titleCase(String(e.snapshot.to ?? '—'))}</b>
+          {e.snapshot.assignmentCode ? ` (at ${e.snapshot.reason === 'handover' || e.snapshot.reason === 'delivery' ? 'delivery' : 'return'} ${String(e.snapshot.assignmentCode)})` : ''}
+        </p>
+      )}
       {e.snapshot && (
         <>
           <button onClick={() => setOpen((o) => !o)} className="mt-1 text-xs font-medium text-brand-700 hover:underline">{open ? 'Hide' : 'Show'} snapshot</button>
@@ -249,6 +324,7 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
                 <Row label="Created">{fmtDate(a.createdAt, true)}</Row>
                 <Row label="Updated">{fmtDate(a.updatedAt, true)}</Row>
               </dl>
+              <LastConditionLine check={a.lastConditionCheck} />
             </div>
             {customEntries.length > 0 && (
               <div className="card p-5">
@@ -259,7 +335,10 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
               </div>
             )}
           </div>
-          <div className="lg:col-span-2"><PhotosPanel asset={a} canUpload={isAdmin} /></div>
+          <div className="space-y-6 lg:col-span-2">
+            <PhotosPanel asset={a} canUpload={isAdmin} />
+            <PhotoHistory history={a.photoHistory ?? []} assetCode={a.code} onOpenAssignment={openDrawer} />
+          </div>
         </div>
       )}
       {drawerId && <AssignmentDrawer assignmentId={drawerId} onClose={closeDrawer} />}

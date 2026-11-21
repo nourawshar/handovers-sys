@@ -87,6 +87,9 @@ export interface Photo {
   url: string
   fileName: string
   createdAt?: string
+  /** Phase 8: assignment photos only. */
+  context?: 'HANDOVER' | 'RETURN' | string
+  assetId?: string | null
 }
 
 export interface PhoneInfo {
@@ -121,8 +124,30 @@ export interface Asset {
   /** Field definitions embedded in GET /assets/:id (detail only). */
   fieldDefinitions?: CategoryField[]
   photos: Photo[]
+  /** Phase 8: per-assignment photos of this asset (detail only), newest first. */
+  photoHistory?: PhotoHistoryEntry[]
+  lastConditionCheck?: LastConditionCheck | null
   createdAt?: string
   updatedAt?: string
+}
+
+export interface PhotoHistoryEntry {
+  assignmentId: string
+  assignmentCode: string
+  status: string
+  employeeName: string
+  assignedAt: string | null
+  returnedAt: string | null
+  role: string
+  handover: Photo[]
+  return: Photo[]
+}
+
+export interface LastConditionCheck {
+  condition: Condition
+  at: string | null
+  source: 'created' | 'delivery' | 'return' | 'manual' | string
+  assignmentCode: string | null
 }
 
 export interface TimelineEntry {
@@ -218,7 +243,7 @@ export interface Assignment {
   assignmentCode: string
   type: string
   status: string
-  employee?: { id: string; fullName: string } | null
+  employee?: { id: string; fullName: string; department?: { id: string; name: string } | null; room?: { id: string; code: string } | null } | null
   workIdentity?: { id: string; name: string } | null
   asset?: { id: string; code: string; name: string; phone?: { make: string | null; model: string | null } | null } | null
   assignedAt?: string | null
@@ -323,7 +348,23 @@ export interface AssignmentItem {
   role: string
   conditionAtHandover?: string | null
   returnCondition?: string | null
-  asset?: { id: string; code: string; name: string; photos?: { id: string; type: string; url: string }[] } | null
+  isActive?: boolean
+  asset?: AssignmentItemAsset | null
+}
+
+/** Phase 8: enriched asset inside an assignment item. `photos` is the asset gallery — never print it on receipts. */
+export interface AssignmentItemAsset {
+  id: string
+  code: string
+  name: string
+  serialNumber?: string | null
+  qty?: number | null
+  notes?: string | null
+  category?: { id: string; name: string } | null
+  room?: { id: string; code: string } | null
+  phone?: { imei: string | null; make: string | null; model: string | null; color: string | null; storage: string | null } | null
+  customFields?: { key: string; label: string; type: string; value: unknown }[]
+  photos?: { id: string; type: string; url: string }[]
 }
 
 /** Full assignment detail incl. items + phone detail + photos (§7.2). */
@@ -366,6 +407,8 @@ export interface PhoneAssignmentPayload {
   bitrixAccountId?: string | null
   chargerCableAssetId?: string | null
   chargerAdapterAssetId?: string | null
+  /** Phase 8: condition of the phone itself at handover (written back to the asset when it differs). */
+  phoneCondition?: string
   expectedReturnAt?: string | null
   notes?: string | null
   /** On-the-fly work identity (CHANGE 4) — a manually typed name + department (+ room for call-centers). */
@@ -381,7 +424,10 @@ export interface GenericAssignmentPayload {
   assetId: string
   /** Optional bundled accessories (monitor/mouse/keyboard/headphone…) — created as BUNDLED items (BE-18). */
   accessoryAssetIds?: string[]
-  conditionAtHandover: string
+  /** Phase 8: per-accessory condition (absent = that asset's current condition). */
+  accessoryConditions?: { assetId: string; condition: string }[]
+  /** Optional since Phase 8 — absent = the primary asset's current condition. */
+  conditionAtHandover?: string
   expectedReturnAt?: string | null
   notes?: string | null
 }

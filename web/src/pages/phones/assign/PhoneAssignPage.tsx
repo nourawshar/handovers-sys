@@ -10,6 +10,7 @@ import { useDebounce } from '@/lib/useDebounce'
 import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, SearchableSelect, Select, Spinner } from '@/components/ui'
 import { WorkIdentityFields, type WorkIdentityValue } from '@/pages/assignments/WorkIdentityFields'
+import { ConditionHint, handoverConditions } from '@/pages/assignments/GenericAssignPage'
 
 /* ------------------------------------------------------------------ */
 /* Draft state (form-shaped) + per-step Zod validation + payload       */
@@ -33,6 +34,10 @@ export interface WizardDraft {
   employeeId: string
   workIdentity: WorkIdentityValue
   phoneAssetId: string
+  /** Code of the chosen phone (review step). */
+  phoneCode: string
+  /** Condition of the phone at handover — prefilled from the asset; a change is written back to it. */
+  phoneCondition: string
   imei: string
   /** "This phone has a SIM / WhatsApp" — OFF means no SIM/WhatsApp data is required or sent. */
   hasSim: boolean
@@ -55,7 +60,7 @@ const emptyWa = (): WaState => ({
 })
 
 export const emptyDraft = (): WizardDraft => ({
-  employeeId: '', workIdentity: { name: '', departmentTeamId: '', roomId: '' }, phoneAssetId: '', imei: '',
+  employeeId: '', workIdentity: { name: '', departmentTeamId: '', roomId: '' }, phoneAssetId: '', phoneCode: '', phoneCondition: '', imei: '',
   hasSim: true, sim1Number: '', sim1AssetId: '', wa1: emptyWa(),
   includeSim2: false, sim2Number: '', sim2AssetId: '', wa2: emptyWa(),
   bitrixAccountId: '', chargerCableAssetId: '', chargerAdapterAssetId: '', notes: '',
@@ -89,7 +94,7 @@ export const stepSchemas: z.ZodTypeAny[] = [
     }),
   }),
   // 2. Phone
-  z.object({ phoneAssetId: z.string().min(1, 'Select a phone') }),
+  z.object({ phoneAssetId: z.string().min(1, 'Select a phone'), phoneCondition: z.string().min(1, 'Select the phone condition at handover') }),
   // 3. SIM1 + WhatsApp main — everything optional (a phone can go out with no SIM, SIM only, or SIM + WhatsApp).
   //    Cross-field rules live in validateSimStep().
   z.object({
@@ -166,6 +171,7 @@ export function buildPhonePayload(draft: WizardDraft, isCallCenter: boolean): Ph
     workIdentityId: undefined,
     workIdentity,
     phoneAssetId: draft.phoneAssetId,
+    phoneCondition: draft.phoneCondition || undefined,
     imei: draft.imei || null,
     sim1Number: hasSim ? toStr(draft.sim1Number) : null,
     sim1AssetId: hasSim ? toStr(draft.sim1AssetId) : null,
@@ -295,7 +301,7 @@ function PhonePicker({ draft, setDraft, errors }: {
           {phones.map((p) => (
             <label key={p.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm transition ${draft.phoneAssetId === p.id ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'}`}>
               <input type="radio" name="phone" className="accent-brand-600" checked={draft.phoneAssetId === p.id}
-                onChange={() => setDraft({ ...draft, phoneAssetId: p.id, imei: p.imei ?? '' })} />
+                onChange={() => setDraft({ ...draft, phoneAssetId: p.id, phoneCode: p.code, phoneCondition: p.condition, imei: p.imei ?? '' })} />
               <span className="flex-1">
                 <span className="block font-medium text-slate-900">{p.name}</span>
                 <span className="block font-mono text-xs text-slate-500">{p.code} · {p.imei ?? 'no IMEI'}</span>
@@ -307,9 +313,17 @@ function PhonePicker({ draft, setDraft, errors }: {
       )}
       {errors.phoneAssetId && <p className="text-xs text-red-600">{errors.phoneAssetId}</p>}
       {selected && (
-        <div className="rounded-lg bg-slate-50 p-3 text-sm">
-          <p className="font-semibold text-slate-900">Selected: {selected.name}</p>
-          <p className="mt-0.5 font-mono text-xs text-slate-500">IMEI {selected.imei ?? '—'} · {selected.phone?.storage ?? '—'} · {selected.condition}</p>
+        <div className="space-y-3 rounded-lg bg-slate-50 p-3 text-sm">
+          <div>
+            <p className="font-semibold text-slate-900">Selected: {selected.code} · {selected.name}</p>
+            <p className="mt-0.5 font-mono text-xs text-slate-500">IMEI {selected.imei ?? '—'} · {selected.phone?.storage ?? '—'} · {selected.condition}</p>
+          </div>
+          <Field label="Phone condition at handover" required className="sm:max-w-xs">
+            <Select value={draft.phoneCondition} onChange={(e) => setDraft({ ...draft, phoneCondition: e.target.value })}>
+              {handoverConditions(draft.phoneCondition).map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
+            </Select>
+            <ConditionHint assetId={selected.id} fallbackCondition={selected.condition} chosen={draft.phoneCondition} />
+          </Field>
         </div>
       )}
     </div>
@@ -446,11 +460,11 @@ export default function PhoneAssignPage() {
           const back = photos.filter((p) => p.type === 'BACK').map((p) => p.file)
           try {
             if (front.length) {
-              const f = new FormData(); f.append('type', 'FRONT'); front.forEach((x) => f.append('photos', x))
+              const f = new FormData(); f.append('type', 'FRONT'); f.append('assetId', draft.phoneAssetId); f.append('context', 'HANDOVER'); front.forEach((x) => f.append('photos', x))
               await api.upload(`/assignments/${assignment.id}/photos`, f)
             }
             if (back.length) {
-              const f = new FormData(); f.append('type', 'BACK'); back.forEach((x) => f.append('photos', x))
+              const f = new FormData(); f.append('type', 'BACK'); f.append('assetId', draft.phoneAssetId); f.append('context', 'HANDOVER'); back.forEach((x) => f.append('photos', x))
               await api.upload(`/assignments/${assignment.id}/photos`, f)
             }
           } catch {
@@ -689,7 +703,8 @@ export function ReviewSnapshot({ draft, photos, names }: {
       {row('Work identity', draft.workIdentity.name || '—')}
       {row('Department', names?.department ?? draft.workIdentity.departmentTeamId)}
       {row('Room', names?.room ?? draft.workIdentity.roomId)}
-      {row('Phone', names?.phone ? `${names.phone} · ${draft.imei || 'no IMEI'}` : <span className="font-mono">{draft.phoneAssetId}</span>)}
+      {row('Phone', names?.phone ? <span><span className="font-mono text-xs font-semibold">{draft.phoneCode}</span> · {names.phone} · {draft.imei || 'no IMEI'}</span> : <span className="font-mono">{draft.phoneCode || draft.phoneAssetId}</span>)}
+      {row('Phone condition', draft.phoneCondition && titleCase(draft.phoneCondition))}
       {row('SIM 1', draft.hasSim ? (draft.sim1Number || 'No SIM selected') : 'No SIM / WhatsApp')}
       {showWa && (
         <>

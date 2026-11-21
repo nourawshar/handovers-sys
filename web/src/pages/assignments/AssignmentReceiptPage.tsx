@@ -3,7 +3,8 @@ import { ArrowLeft, Printer } from 'lucide-react'
 import { useAssignmentDetail } from '@/api/hooks'
 import { ErrorState, Spinner } from '@/components/ui'
 import { fmtDate, titleCase } from '@/lib/utils'
-import type { AssignmentDetail, PhoneAssignmentDetail } from '@/api/types'
+import { fmtCustomValue, hasWhatsApp, orderedItems } from '@/components/AssignmentItems'
+import type { AssignmentDetail, AssignmentItem, PhoneAssignmentDetail, Photo } from '@/api/types'
 
 // Screen-only toolbar; hidden by the print CSS below.
 function Toolbar({ assignmentId }: { assignmentId: string }) {
@@ -63,12 +64,67 @@ function WhatsAppBlock({ pd, which }: { pd: PhoneAssignmentDetail; which: 1 | 2 
         <DetailRow label="App variant" value={appVariant ? titleCase(appVariant) : null} />
         <DetailRow label="Phone number" value={phone ? <span className="font-mono">{phone}</span> : null} />
         <DetailRow label="Backup Gmail" value={backupEmail ? <span className="font-mono">{backupEmail}</span> : null} />
-        <DetailRow label="Backup condition" value={backupCondition(pd, which)} />
-        <DetailRow
-          label="Chats"
-          value={`normal ${normal ?? 0} · archived ${archived ?? 0}`}
-        />
+        {(pd[`wa${which}BackupDate` as 'wa1BackupDate'] || pd[`wa${which}BackupUsedGB` as 'wa1BackupUsedGB'] != null || pd[`wa${which}BackupTotalGB` as 'wa1BackupTotalGB'] != null) && (
+          <DetailRow label="Backup condition" value={backupCondition(pd, which)} />
+        )}
+        {(normal != null || archived != null) && (
+          <DetailRow
+            label="Chats"
+            value={`normal ${normal ?? 0} · archived ${archived ?? 0}`}
+          />
+        )}
       </dl>
+    </section>
+  )
+}
+
+const photoLabel = (t: string) => (t === 'FRONT' ? 'Ön / Front' : t === 'BACK' ? 'Arka / Back' : t === 'CONDITION' ? 'Durum / Condition' : titleCase(t))
+
+function PhotoStrip({ photos, alt }: { photos: Photo[]; alt: string }) {
+  return (
+    <div className="receipt-photos">
+      {photos.map((p) => (
+        <div key={p.id} className="receipt-photo">
+          <img src={p.url} alt={`${alt} ${p.type} photo`} />
+          <span>{photoLabel(p.type)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** One block per item: identity, condition, notes, room, custom columns, phone hardware, and ITS OWN handover photos. */
+function ItemReceiptBlock({ it, photos }: { it: AssignmentItem; photos: Photo[] }) {
+  const as = it.asset
+  if (!as) return null
+  const ph = as.phone
+  const custom = (as.customFields ?? []).map((f) => ({ ...f, text: fmtCustomValue(f.value) })).filter((f) => f.text !== null)
+  const roleLabel = it.role === 'PRIMARY' ? 'Ana cihaz / Main device' : it.role === 'BUNDLED' ? 'Aksesuar / Accessory' : titleCase(it.role)
+  return (
+    <section className="receipt-section receipt-item">
+      <h2>{roleLabel} · <span className="font-mono">{as.code}</span> · {as.name}</h2>
+      <dl className="receipt-grid">
+        <DetailRow label="Kod / Code" value={<span className="font-mono">{as.code}</span>} />
+        <DetailRow label="Ad / Name" value={as.name} />
+        <DetailRow label="Kategori / Category" value={as.category?.name} />
+        <DetailRow label="Seri no / Serial number" value={as.serialNumber ? <span className="font-mono">{as.serialNumber}</span> : null} />
+        {(as.qty ?? 1) > 1 && <DetailRow label="Adet / Quantity" value={as.qty} />}
+        <DetailRow label="Teslim durumu / Condition at handover" value={it.conditionAtHandover ? titleCase(it.conditionAtHandover) : null} />
+        <DetailRow label="Oda / Room" value={as.room?.code} />
+        <DetailRow label="IMEI" value={ph?.imei ? <span className="font-mono">{ph.imei}</span> : null} />
+        <DetailRow label="Marka / Make" value={ph?.make} />
+        <DetailRow label="Model" value={ph?.model} />
+        <DetailRow label="Renk / Colour" value={ph?.color} />
+        <DetailRow label="Depolama / Storage" value={ph?.storage} />
+        {custom.map((f) => <DetailRow key={f.key} label={f.label} value={f.text} />)}
+        <DetailRow label="Cihaz notları / Asset notes" value={as.notes} />
+      </dl>
+      {photos.length > 0 && (
+        <>
+          <h3 className="receipt-subhead">Teslim fotoğrafları / Handover photos</h3>
+          <PhotoStrip photos={photos} alt={as.code} />
+        </>
+      )}
     </section>
   )
 }
@@ -76,14 +132,11 @@ function WhatsAppBlock({ pd, which }: { pd: PhoneAssignmentDetail; which: 1 | 2 
 function ReceiptBody({ a }: { a: AssignmentDetail }) {
   const pd = a.phoneDetail
   const sim2 = pd?.sim2Number
-  const primary = a.items.find((i) => i.role === 'PRIMARY') ?? a.items[0]
-  const photos = a.photos.filter((p) => p.type === 'FRONT' || p.type === 'BACK' || p.type === 'CONDITION')
-  const photoLabel = (t: string) => (t === 'FRONT' ? 'Ön / Front' : t === 'BACK' ? 'Arka / Back' : t === 'CONDITION' ? 'Durum / Condition' : titleCase(t))
-  // Each item's own asset photos (items[].asset.photos), captioned with code + name.
-  const itemPhotos = a.items
-    .filter((i) => i.asset && (i.asset.photos?.length ?? 0) > 0)
-    .map((i) => ({ key: i.id, asset: i.asset!, photos: i.asset!.photos! }))
-  const hasAnyPhotos = photos.length > 0 || itemPhotos.length > 0
+  const items = orderedItems(a)
+  // R5: ONLY this assignment's own HANDOVER photos. Never items[].asset.photos (gallery), never RETURN.
+  const handover = a.photos.filter((p) => p.context === 'HANDOVER')
+  const itemAssetIds = new Set(items.map((i) => i.asset?.id).filter(Boolean))
+  const wholePhotos = handover.filter((p) => !p.assetId || !itemAssetIds.has(p.assetId))
 
   const bitrixLabel = pd
     ? pd.bitrixAccount
@@ -109,78 +162,57 @@ function ReceiptBody({ a }: { a: AssignmentDetail }) {
         <h2>Teslim Edilen / Issued To</h2>
         <dl className="receipt-grid">
           <DetailRow label="Personel / Employee" value={a.employee?.fullName} />
+          <DetailRow label="Departman / Department" value={a.employee?.department?.name} />
+          <DetailRow label="Oda / Room" value={a.employee?.room?.code} />
           <DetailRow label="Görev / Work identity" value={a.workIdentity?.name} />
         </dl>
       </section>
 
-      <section className="receipt-section">
-        <h2>Cihaz / Device</h2>
-        <dl className="receipt-grid">
-          <DetailRow label="Kod / Code" value={a.asset?.code ? <span className="font-mono">{a.asset.code}</span> : null} />
-          <DetailRow label="Ad / Name" value={a.asset?.name} />
-          <DetailRow label="Durum / Condition" value={primary?.conditionAtHandover ? titleCase(primary.conditionAtHandover) : null} />
-        </dl>
-      </section>
+      {items.map((it) => (
+        <ItemReceiptBlock
+          key={it.id}
+          it={it}
+          photos={handover.filter((p) => !!it.asset && p.assetId === it.asset.id)}
+        />
+      ))}
 
       {pd && (
         <>
-          <section className="receipt-section">
+          {pd.sim1Number && <section className="receipt-section">
             <h2>SIM Kartları / SIM Cards</h2>
             <dl className="receipt-grid">
               <DetailRow label="SIM 1" value={pd.sim1Number ? <span className="font-mono">{pd.sim1Number}</span> : null} />
               {sim2 && <DetailRow label="SIM 2" value={<span className="font-mono">{sim2}</span>} />}
             </dl>
-          </section>
+          </section>}
 
-          <WhatsAppBlock pd={pd} which={1} />
-          {sim2 && <WhatsAppBlock pd={pd} which={2} />}
+          {hasWhatsApp(pd, 1) && <WhatsAppBlock pd={pd} which={1} />}
+          {sim2 && hasWhatsApp(pd, 2) && <WhatsAppBlock pd={pd} which={2} />}
 
-          <section className="receipt-section">
+          {(bitrixLabel || cableLabel || adapterLabel) && <section className="receipt-section">
             <h2>Bağlantılar / Accounts & Accessories</h2>
             <dl className="receipt-grid">
               <DetailRow label="Bitrix hesap / Bitrix" value={bitrixLabel} />
               <DetailRow label="Şarj kablosu / Charger cable" value={cableLabel} />
               <DetailRow label="Adaptör / Adapter" value={adapterLabel} />
             </dl>
-          </section>
+          </section>}
         </>
       )}
 
-      <section className="receipt-section receipt-photos-section">
-        <h2>Fotoğraflar / Photos</h2>
-        {!hasAnyPhotos ? (
-          <p className="receipt-empty">Fotoğraf yok / No photos recorded.</p>
-        ) : (
-          <>
-            {photos.length > 0 && (
-              <>
-                <h3 className="receipt-subhead">Teslim fotoğrafları / Handover photos</h3>
-                <div className="receipt-photos">
-                  {photos.map((p) => (
-                    <div key={p.id} className="receipt-photo">
-                      <img src={p.url} alt={`${p.type} photo`} />
-                      <span>{photoLabel(p.type)}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-            {itemPhotos.map((it) => (
-              <div key={it.key} className="receipt-item-photos">
-                <h3 className="receipt-subhead">{it.asset.code} · {it.asset.name}</h3>
-                <div className="receipt-photos">
-                  {it.photos.map((p) => (
-                    <div key={p.id} className="receipt-photo">
-                      <img src={p.url} alt={`${it.asset.code} ${p.type} photo`} />
-                      <span>{it.asset.code} · {it.asset.name}{p.type !== 'GENERAL' ? ` (${photoLabel(p.type)})` : ''}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-      </section>
+      {wholePhotos.length > 0 && (
+        <section className="receipt-section receipt-photos-section">
+          <h2>Tüm teslimat / Whole handover</h2>
+          <PhotoStrip photos={wholePhotos} alt="Whole handover" />
+        </section>
+      )}
+
+      {a.notes && (
+        <section className="receipt-section">
+          <h2>Notlar / Notes</h2>
+          <p className="receipt-notes">{a.notes}</p>
+        </section>
+      )}
 
       <section className="receipt-signatures">
         <div>
@@ -247,6 +279,7 @@ export default function AssignmentReceiptPage() {
         .receipt-photo { break-inside: avoid; text-align: center; }
         .receipt-photo img { width: 100%; max-width: 120px; border: 1px solid #cbd5e1; border-radius: 3px; }
         .receipt-photo span { display: block; margin-top: 3px; font-size: 11px; color: #475569; }
+        .receipt-notes { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
         .receipt-empty { font-size: 12px; color: #64748b; }
 
         .receipt-signatures { break-inside: avoid; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 40px; }

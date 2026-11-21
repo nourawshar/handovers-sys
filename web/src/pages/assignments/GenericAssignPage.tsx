@@ -3,11 +3,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, Loader2, Search, X } from 'lucide-react'
 import { z } from 'zod'
 import { api } from '@/api/client'
-import { useAssets, useCategories, useCreateGenericAssignment, useDepartments, useEmployees, useRooms } from '@/api/hooks'
-import type { Category, GenericAssignmentPayload, WorkIdentityInput } from '@/api/types'
+import { useAsset, useAssets, useCategories, useCreateGenericAssignment, useDepartments, useEmployees, useRooms } from '@/api/hooks'
+import type { Asset, GenericAssignmentPayload, LastConditionCheck, WorkIdentityInput } from '@/api/types'
 import { CONDITIONS } from '@/api/types'
 import { useDebounce } from '@/lib/useDebounce'
-import { titleCase } from '@/lib/utils'
+import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, SearchableSelect, Select, Spinner } from '@/components/ui'
 import { WorkIdentityFields, type WorkIdentityValue } from './WorkIdentityFields'
 
@@ -15,13 +15,22 @@ import { WorkIdentityFields, type WorkIdentityValue } from './WorkIdentityFields
 export const GENERIC_ASSET_TYPES = ['LAPTOP', 'PRINTER', 'SIM', 'GENERAL', 'COMPUTERS', 'MONITORS', 'MOUSE', 'KEYBOARDS', 'HEADPHONES'] as const
 export type GenericAssetType = (typeof GENERIC_ASSET_TYPES)[number]
 
+/** Compact view of an asset kept in the draft (review step, condition prefill, accessory filtering). */
+export interface AssetBrief { id: string; code: string; name: string; categoryId: string; categoryName: string; condition: string }
+export interface AccessoryPick extends AssetBrief { chosenCondition: string }
+const briefOf = (a: Asset): AssetBrief => ({
+  id: a.id, code: a.code, name: a.name, categoryId: a.categoryId, categoryName: a.category?.name?.toString() ?? '', condition: a.condition,
+})
+
 export interface GenericDraft {
   employeeId: string
   workIdentity: WorkIdentityValue
   type: GenericAssetType | ''
   assetId: string
-  /** Optional bundled accessories (monitor/mouse/keyboard/headphone…) — sent as accessoryAssetIds (BE-18). */
-  accessoryAssetIds: string[]
+  /** The chosen main asset. */
+  assetInfo: AssetBrief | null
+  /** Optional accessories — sent as accessoryAssetIds + accessoryConditions (Phase 8 R2). */
+  accessories: AccessoryPick[]
   conditionAtHandover: string
   expectedReturnAt: string
   notes: string
@@ -29,7 +38,7 @@ export interface GenericDraft {
 
 const emptyDraft = (): GenericDraft => ({
   employeeId: '', workIdentity: { name: '', departmentTeamId: '', roomId: '' }, type: '',
-  assetId: '', accessoryAssetIds: [], conditionAtHandover: '', expectedReturnAt: '', notes: '',
+  assetId: '', assetInfo: null, accessories: [], conditionAtHandover: '', expectedReturnAt: '', notes: '',
 })
 
 const dateOrEmpty = () => z.string().trim().refine((v) => v === '' || !Number.isNaN(new Date(`${v}T00:00:00`).getTime()), 'Enter a valid date')
@@ -48,7 +57,7 @@ const stepSchemas: z.ZodTypeAny[] = [
   z.object({
     type: z.enum(GENERIC_ASSET_TYPES, { message: 'Select an asset type' }),
     assetId: z.string().min(1, 'Select an asset'),
-    accessoryAssetIds: z.array(z.string()),
+    accessories: z.array(z.object({ id: z.string() })),
   }),
   // 3. Details
   z.object({
@@ -87,15 +96,47 @@ export function buildGenericPayload(draft: GenericDraft, isCallCenter: boolean):
     workIdentityId: undefined,
     workIdentity,
     assetId: draft.assetId,
-    accessoryAssetIds: draft.accessoryAssetIds.length ? draft.accessoryAssetIds : undefined,
-    conditionAtHandover: draft.conditionAtHandover,
+    accessoryAssetIds: draft.accessories.length ? draft.accessories.map((a) => a.id) : undefined,
+    accessoryConditions: draft.accessories.length ? draft.accessories.map((a) => ({ assetId: a.id, condition: a.chosenCondition })) : undefined,
+    conditionAtHandover: draft.conditionAtHandover || undefined,
     expectedReturnAt: draft.expectedReturnAt || null,
     notes: draft.notes || null,
   }
 }
 
+/** Conditions offered at handover (DISPOSED makes no sense for an asset going out — unless it already is the value). */
+export const handoverConditions = (current?: string): string[] => CONDITIONS.filter((c) => c !== 'DISPOSED' || c === current)
+
+const sourceLabel = (c: LastConditionCheck): string => {
+  const code = c.assignmentCode
+  if (c.source === 'return') return code ? `return ${code}` : 'a return'
+  if (c.source === 'delivery') return code ? `delivery ${code}` : 'a delivery'
+  if (c.source === 'created') return 'when it was created'
+  return 'the asset record'
+}
+
+/** "Last recorded: Fair — from return A-000012 on 3 Nov 2026", plus the write-back note once the user changes it. */
+export function ConditionHint({ assetId, fallbackCondition, chosen }: { assetId: string; fallbackCondition?: string; chosen: string }) {
+  const asset = useAsset(assetId || undefined)
+  const last = asset.data?.asset?.lastConditionCheck
+  const current = asset.data?.asset?.condition ?? fallbackCondition
+  return (
+    <div className="mt-1 space-y-0.5 text-xs">
+      {last ? (
+        <p className="text-slate-500">Last recorded: {titleCase(last.condition)} — from {sourceLabel(last)}{last.at ? ` on ${fmtDate(last.at)}` : ''}</p>
+      ) : current ? (
+        <p className="text-slate-500">Last recorded: {titleCase(current)}</p>
+      ) : null}
+      {current && chosen && chosen !== current && (
+        <p className="text-amber-700">The asset's condition will be updated to {titleCase(chosen)} on handover.</p>
+      )}
+    </div>
+  )
+}
+
 export type GenericPhotoType = 'FRONT' | 'BACK' | 'CONDITION'
-export interface GenericPhotoPick { type: GenericPhotoType; file: File; url: string }
+/** `target` = id of the asset the photo is tagged to ('' = the main asset). */
+export interface GenericPhotoPick { type: GenericPhotoType; file: File; url: string; target: string }
 
 const PHOTO_ACCEPT = ['image/jpeg', 'image/png', 'image/webp']
 const PHOTO_MAX_MB = 5
@@ -104,7 +145,9 @@ const PHOTO_SLOTS: { type: GenericPhotoType; label: string }[] = [
 ]
 
 /** Front / back / condition photo slots (one image each). Files upload after the assignment is created. */
-function GenericPhotoPicker({ photos, setPhotos }: { photos: GenericPhotoPick[]; setPhotos: (p: GenericPhotoPick[]) => void }) {
+function GenericPhotoPicker({ photos, setPhotos, main, accessories }: {
+  photos: GenericPhotoPick[]; setPhotos: (p: GenericPhotoPick[]) => void; main: AssetBrief | null; accessories: AccessoryPick[]
+}) {
   const inputs = useRef<Partial<Record<GenericPhotoType, HTMLInputElement | null>>>({})
   const [err, setErr] = useState<string | null>(null)
 
@@ -116,7 +159,7 @@ function GenericPhotoPicker({ photos, setPhotos }: { photos: GenericPhotoPick[];
     if (file.size > PHOTO_MAX_MB * 1024 * 1024) return setErr(`“${file.name}” is larger than ${PHOTO_MAX_MB} MB.`)
     const old = photos.find((p) => p.type === type)
     if (old) URL.revokeObjectURL(old.url)
-    setPhotos([...photos.filter((p) => p.type !== type), { type, file, url: URL.createObjectURL(file) }])
+    setPhotos([...photos.filter((p) => p.type !== type), { type, file, url: URL.createObjectURL(file), target: old?.target ?? '' }])
     const el = inputs.current[type]
     if (el) el.value = ''
   }
@@ -130,7 +173,9 @@ function GenericPhotoPicker({ photos, setPhotos }: { photos: GenericPhotoPick[];
     <div className="space-y-3 sm:col-span-2">
       <div>
         <p className="text-sm font-medium text-slate-800">Photos <span className="font-normal text-slate-500">(optional — JPEG/PNG/WebP, max {PHOTO_MAX_MB} MB each)</span></p>
-        <p className="text-xs text-slate-500">Front, back and a condition close-up. They upload after the assignment is created.</p>
+        <p className="text-xs text-slate-500">
+          Front, back and a condition close-up. They upload after the assignment is created{accessories.length > 0 ? ' — tag each photo to the main asset or an accessory' : ''}.
+        </p>
       </div>
       {err && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{err}</div>}
       <div className="grid gap-3 sm:grid-cols-3">
@@ -149,6 +194,13 @@ function GenericPhotoPicker({ photos, setPhotos }: { photos: GenericPhotoPick[];
                   <span className="truncate">{p.file.name}</span>
                   <button type="button" onClick={() => remove(type)} aria-label={`Remove ${label}`} className="text-slate-400 hover:text-red-600"><X className="h-4 w-4" /></button>
                 </div>
+              )}
+              {p && accessories.length > 0 && (
+                <Select aria-label={`${label} belongs to`} value={accessories.some((a) => a.id === p.target) ? p.target : ''}
+                  onChange={(e) => setPhotos(photos.map((x) => (x.type === type ? { ...x, target: e.target.value } : x)))}>
+                  <option value="">{main ? `${main.code} (main asset)` : 'Main asset'}</option>
+                  {accessories.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                </Select>
               )}
             </div>
           )
@@ -188,7 +240,7 @@ function AssetPicker({ draft, setDraft, errors }: {
     !!draft.type,
   )
   const candidates = (list.data?.items ?? []).filter((a) => !phoneCatIds.has(a.categoryId))
-  const selected = candidates.find((a) => a.id === draft.assetId)
+  const selected = candidates.find((a) => a.id === draft.assetId) ?? (draft.assetInfo?.id === draft.assetId ? draft.assetInfo : undefined)
 
   return (
     <div className="space-y-4">
@@ -205,7 +257,14 @@ function AssetPicker({ draft, setDraft, errors }: {
           {candidates.map((a) => (
             <label key={a.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm transition ${draft.assetId === a.id ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'}`}>
               <input type="radio" name="asset" className="accent-brand-600" checked={draft.assetId === a.id}
-                onChange={() => setDraft({ ...draft, assetId: a.id, accessoryAssetIds: draft.accessoryAssetIds.filter((x) => x !== a.id) })} />
+                onChange={() => setDraft({
+                  ...draft,
+                  assetId: a.id,
+                  assetInfo: briefOf(a),
+                  // Condition at handover starts as the asset's own condition (never empty).
+                  conditionAtHandover: a.condition,
+                  accessories: draft.accessories.filter((x) => x.id !== a.id && x.categoryId !== a.categoryId),
+                })} />
               <span className="flex-1">
                 <span className="block font-medium text-slate-900">{a.name}</span>
                 <span className="block font-mono text-xs text-slate-500">{a.code} · {a.category?.name?.toString() ?? '—'} · {a.serialNumber ?? 'no serial'}</span>
@@ -226,70 +285,107 @@ function AssetPicker({ draft, setDraft, errors }: {
   )
 }
 
-/** One accessory category's available assets (checkbox list) — also used by the import's bundle (BE-18). */
-function AccessoryCatPiece({ category, draft, setDraft }: {
-  category: Category; draft: GenericDraft; setDraft: (d: GenericDraft) => void
-}) {
-  const list = useAssets({ categoryId: category.id, status: 'AVAILABLE', pageSize: 100 }, true)
-  const items = (list.data?.items ?? []).filter((a) => a.id !== draft.assetId)
-  if (items.length === 0) return null
-  const toggle = (id: string) => {
-    const has = draft.accessoryAssetIds.includes(id)
-    setDraft({
-      ...draft,
-      accessoryAssetIds: has ? draft.accessoryAssetIds.filter((x) => x !== id) : [...draft.accessoryAssetIds, id],
-    })
-  }
-  return (
-    <div>
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{category.name}</p>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {items.map((a) => (
-          <label key={a.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm transition ${draft.accessoryAssetIds.includes(a.id) ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'}`}>
-            <input type="checkbox" className="accent-brand-600" checked={draft.accessoryAssetIds.includes(a.id)}
-              onChange={() => toggle(a.id)} />
-            <span className="flex-1">
-              <span className="block font-medium text-slate-900">{a.name}</span>
-              <span className="block font-mono text-xs text-slate-500">{a.code} · {a.serialNumber ?? 'no serial'}</span>
-            </span>
-            <Badge>{a.condition}</Badge>
-          </label>
-        ))}
-      </div>
-    </div>
-  )
-}
+const isPhoneRoot = (n: string) => /^phones?$/i.test(n.trim())
+const isSimRoot = (n: string) => /^sim(\s|-)?(cards?)?$/i.test(n.trim())
 
-/** Optional bundled accessories multi-select: Monitors / Mouse / Keyboards / Headphones (CHANGE 3, FE-17). */
+/**
+ * "Add accessories" (Phase 8 R2): pick ANY physical category except Phones, SIM Cards and the main asset's own,
+ * tick available assets → removable chips with a per-item condition. Several categories can be used in turn,
+ * and categories created by the user show up automatically (no hard-coded names).
+ */
 function AccessoryPicker({ draft, setDraft }: { draft: GenericDraft; setDraft: (d: GenericDraft) => void }) {
   const categories = useCategories()
-  // Root categories matching the import's accessory families.
-  const accessoryRoots = (categories.data ?? []).filter(
-    (c) => !c.parentId && /monitor|mouse|keyboard|headphone/i.test(c.name),
-  )
-  const selectedCount = draft.accessoryAssetIds.length
+  const [catId, setCatId] = useState('')
+  const mainCategoryId = draft.assetInfo?.categoryId
+
+  const options = useMemo(() => {
+    const all = categories.data ?? []
+    const byId = new Map(all.map((c) => [c.id, c]))
+    return all
+      .filter((c) => {
+        if (c.isActive === false || c.kind !== 'physical' || c.id === mainCategoryId) return false
+        const root = c.parentId ? byId.get(c.parentId) ?? c : c
+        return !(isPhoneRoot(root.name) || isSimRoot(root.name))
+      })
+      .map((c) => ({ value: c.id, label: c.parentId && byId.get(c.parentId) ? `${byId.get(c.parentId)!.name} › ${c.name}` : c.name }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [categories.data, mainCategoryId])
+  const activeCat = options.some((o) => o.value === catId) ? catId : ''
+
+  const list = useAssets({ categoryId: activeCat || undefined, status: 'AVAILABLE', pageSize: 100 }, !!activeCat)
+  const items = (list.data?.items ?? []).filter((a) => a.id !== draft.assetId)
+  const picked = (id: string) => draft.accessories.some((x) => x.id === id)
+  const toggle = (a: Asset) => setDraft({
+    ...draft,
+    accessories: picked(a.id)
+      ? draft.accessories.filter((x) => x.id !== a.id)
+      : [...draft.accessories, { ...briefOf(a), chosenCondition: a.condition }],
+  })
+  const setCond = (id: string, chosenCondition: string) =>
+    setDraft({ ...draft, accessories: draft.accessories.map((x) => (x.id === id ? { ...x, chosenCondition } : x)) })
+
   return (
-    <div className="space-y-4 rounded-lg border border-dashed border-slate-300 p-4">
+    <div className="space-y-3 rounded-lg border border-dashed border-slate-300 p-4">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-800">
-          Accessories <span className="font-normal text-slate-500">(optional — bundled with this handover)</span>
+          Add accessories <span className="font-normal text-slate-500">(optional — handed over together with the main asset)</span>
         </p>
-        {selectedCount > 0 && (
-          <button type="button" onClick={() => setDraft({ ...draft, accessoryAssetIds: [] })}
-            className="text-xs font-medium text-slate-500 hover:text-red-600">
-            Clear ({selectedCount})
+        {draft.accessories.length > 0 && (
+          <button type="button" onClick={() => setDraft({ ...draft, accessories: [] })} className="text-xs font-medium text-slate-500 hover:text-red-600">
+            Clear ({draft.accessories.length})
           </button>
         )}
       </div>
-      {accessoryRoots.length === 0 ? (
-        <p className="text-xs text-slate-500">No accessory categories (Monitors / Mouse / Keyboards / Headphones) are set up yet — create them under Settings → Categories.</p>
-      ) : (
-        <div className="space-y-4">
-          {accessoryRoots.map((cat) => (
-            <AccessoryCatPiece key={cat.id} category={cat} draft={draft} setDraft={setDraft} />
+
+      {draft.accessories.length > 0 && (
+        <ul className="space-y-2" aria-label="Selected accessories">
+          {draft.accessories.map((a) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 py-1.5 pl-3 pr-2 text-sm">
+              <span className="font-mono text-xs text-slate-700">{a.code}</span>
+              <span className="text-slate-400">·</span>
+              <span className="min-w-0 flex-1 truncate font-medium text-slate-900">{a.name}</span>
+              <Select aria-label={`Condition of ${a.code}`} className="!w-auto text-xs" value={a.chosenCondition} onChange={(e) => setCond(a.id, e.target.value)}>
+                {handoverConditions(a.chosenCondition).map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
+              </Select>
+              <button type="button" onClick={() => setDraft({ ...draft, accessories: draft.accessories.filter((x) => x.id !== a.id) })}
+                aria-label={`Remove ${a.code}`} className="rounded-full p-1 text-slate-400 hover:bg-white hover:text-red-600"><X className="h-4 w-4" /></button>
+            </li>
           ))}
-          {selectedCount === 0 && <p className="text-xs text-slate-400">Tick any available monitors, mice, keyboards or headphones to assign them with the main asset.</p>}
-        </div>
+        </ul>
+      )}
+
+      {categories.isLoading ? <Spinner /> : options.length === 0 ? (
+        <p className="text-xs text-slate-500">No other physical categories exist yet — create one under Settings → Categories.</p>
+      ) : (
+        <>
+          <SearchableSelect
+            ariaLabel="Accessory category"
+            options={options}
+            value={activeCat}
+            onChange={setCatId}
+            placeholder="Type to filter categories…"
+            selectPlaceholder="— choose a category to add accessories from —"
+          />
+          {activeCat && (list.isLoading ? <Spinner /> : list.isError ? <ErrorState error={list.error} /> : items.length === 0 ? (
+            <p className="text-xs text-slate-500">No available assets in this category.</p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {items.map((a) => (
+                <label key={a.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm transition ${picked(a.id) ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                  <input type="checkbox" className="accent-brand-600" checked={picked(a.id)} onChange={() => toggle(a)} />
+                  <span className="flex-1">
+                    <span className="block font-medium text-slate-900">{a.name}</span>
+                    <span className="block font-mono text-xs text-slate-500">{a.code} · {a.serialNumber ?? 'no serial'}</span>
+                  </span>
+                  <Badge>{a.condition}</Badge>
+                </label>
+              ))}
+            </div>
+          ))}
+          {!activeCat && draft.accessories.length === 0 && (
+            <p className="text-xs text-slate-400">Pick a category, tick the assets to add, then pick another category to add more.</p>
+          )}
+        </>
       )}
     </div>
   )
@@ -305,18 +401,6 @@ export default function GenericAssignPage() {
   const employees = useEmployees({ pageSize: 100 })
   const departments = useDepartments()
   const rooms = useRooms()
-  // Availability lookup for the review step's asset name (AssetPicker fetches its own for the picker UI).
-  const availability = useAssets({ status: 'AVAILABLE', pageSize: 100 }, true)
-  const assetName = availability.data?.items.find((a) => a.id === draft.assetId)?.name
-  // Accessory codes for the review step (falls back to a count when a code isn't in the fetched window).
-  const accessorySummary = draft.accessoryAssetIds
-    .map((id) => ({ id, code: availability.data?.items.find((a) => a.id === id)?.code }))
-    .filter((x): x is { id: string; code: string } => !!x.code)
-  const accessoryLabel = draft.accessoryAssetIds.length === 0
-    ? ''
-    : accessorySummary.length === draft.accessoryAssetIds.length
-      ? accessorySummary.map((x) => x.code).join(', ')
-      : `${draft.accessoryAssetIds.length} accessory asset${draft.accessoryAssetIds.length === 1 ? '' : 's'}`
 
   const next = () => {
     const e = validateGenericStep(stepSchemas[step], draft)
@@ -343,7 +427,10 @@ export default function GenericAssignPage() {
         const failed: string[] = []
         for (const p of photos) {
           try {
-            const f = new FormData(); f.append('type', p.type); f.append('photos', p.file)
+            // Tag each photo to the main asset (default) or its accessory, context HANDOVER (Phase 8 R5).
+            const target = draft.accessories.some((a) => a.id === p.target) ? p.target : draft.assetId
+            const f = new FormData()
+            f.append('type', p.type); f.append('assetId', target); f.append('context', 'HANDOVER'); f.append('photos', p.file)
             await api.upload(`/assignments/${assignment.id}/photos`, f)
           } catch { failed.push(p.type) }
         }
@@ -414,9 +501,9 @@ export default function GenericAssignPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Condition at handover" required error={errors.conditionAtHandover}>
               <Select value={draft.conditionAtHandover} onChange={(e) => setDraft({ ...draft, conditionAtHandover: e.target.value })}>
-                <option value="">— select —</option>
-                {CONDITIONS.map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
+                {handoverConditions(draft.conditionAtHandover).map((c) => <option key={c} value={c}>{titleCase(c)}</option>)}
               </Select>
+              <ConditionHint assetId={draft.assetId} fallbackCondition={draft.assetInfo?.condition} chosen={draft.conditionAtHandover} />
             </Field>
             <Field label="Expected return date" error={errors.expectedReturnAt}>
               <Input type="date" value={draft.expectedReturnAt} onChange={(e) => setDraft({ ...draft, expectedReturnAt: e.target.value })} />
@@ -424,7 +511,7 @@ export default function GenericAssignPage() {
             <Field label="Notes" className="sm:col-span-2">
               <Input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder="Optional notes about the handover" />
             </Field>
-            <GenericPhotoPicker photos={photos} setPhotos={setPhotos} />
+            <GenericPhotoPicker photos={photos} setPhotos={setPhotos} main={draft.assetInfo} accessories={draft.accessories} />
           </div>
         )}
 
@@ -437,16 +524,24 @@ export default function GenericAssignPage() {
               {reviewRow('Department', departments.data?.find((d) => d.id === draft.workIdentity.departmentTeamId)?.name)}
               {reviewRow('Room', rooms.data?.find((r) => r.id === draft.workIdentity.roomId)?.code)}
               {reviewRow('Asset type', draft.type && titleCase(draft.type))}
-              {reviewRow('Asset', assetName ? <span className="inline-flex items-center gap-2">{assetName} <span className="font-mono text-xs text-slate-500">({draft.assetId.slice(0, 8)})</span></span> : draft.assetId)}
-              {reviewRow('Accessories', accessoryLabel && <span className="font-mono">{accessoryLabel}</span>)}
-              {reviewRow('Condition', draft.conditionAtHandover)}
+              {reviewRow('Asset', draft.assetInfo ? <span><span className="font-mono text-xs font-semibold">{draft.assetInfo.code}</span> · {draft.assetInfo.name}</span> : draft.assetId)}
+              {reviewRow('Accessories', draft.accessories.length ? (
+                <ul className="space-y-0.5">
+                  {draft.accessories.map((a) => (
+                    <li key={a.id}><span className="font-mono text-xs font-semibold">{a.code}</span> · {a.name} <span className="text-slate-500">— {titleCase(a.chosenCondition)}</span></li>
+                  ))}
+                </ul>
+              ) : undefined)}
+              {reviewRow('Condition', draft.conditionAtHandover && titleCase(draft.conditionAtHandover))}
               {reviewRow('Expected return', draft.expectedReturnAt)}
               {reviewRow('Notes', draft.notes)}
               {reviewRow('Photos', photos.length ? (
                 <span className="flex flex-wrap gap-2">
                   {photos.map((p) => (
                     <span key={p.type} className="inline-flex flex-col items-center gap-0.5 text-xs text-slate-500">
-                      <img src={p.url} alt={`${p.type} thumbnail`} className="h-16 w-16 rounded-md border border-slate-200 object-cover" />{titleCase(p.type)}
+                      <img src={p.url} alt={`${p.type} thumbnail`} className="h-16 w-16 rounded-md border border-slate-200 object-cover" />
+                      {titleCase(p.type)}
+                      <span className="font-mono">{draft.accessories.find((a) => a.id === p.target)?.code ?? draft.assetInfo?.code}</span>
                     </span>
                   ))}
                 </span>

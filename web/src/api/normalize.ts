@@ -41,6 +41,8 @@ const mapPhoto = (p: R): Photo => ({
   url: photoUrl(p),
   fileName: p.fileName ?? '',
   createdAt: p.createdAt,
+  context: p.context,
+  assetId: p.assetId ?? null,
 })
 export { mapPhoto as normPhoto }
 
@@ -132,6 +134,22 @@ export function normAsset(raw: R): Asset {
     customFields: obj(x.customFields) ?? {},
     fieldDefinitions: Array.isArray(x.customFieldDefinitions) ? x.customFieldDefinitions.map(normField) : undefined,
     photos: Array.isArray(x.photos) ? x.photos.map(mapPhoto) : [],
+    photoHistory: Array.isArray(x.photoHistory)
+      ? x.photoHistory.map((h: R) => ({
+          assignmentId: String(h.assignmentId),
+          assignmentCode: h.assignmentCode ?? '',
+          status: h.status ?? '',
+          employeeName: h.employeeName ?? '',
+          assignedAt: h.assignedAt ?? null,
+          returnedAt: h.returnedAt ?? null,
+          role: h.role ?? '',
+          handover: Array.isArray(h.handover) ? h.handover.map(mapPhoto) : [],
+          return: Array.isArray(h.return) ? h.return.map(mapPhoto) : [],
+        }))
+      : [],
+    lastConditionCheck: obj(x.lastConditionCheck)
+      ? { condition: x.lastConditionCheck.condition, at: x.lastConditionCheck.at ?? null, source: x.lastConditionCheck.source ?? 'created', assignmentCode: x.lastConditionCheck.assignmentCode ?? null }
+      : null,
     createdAt: x.createdAt,
     updatedAt: x.updatedAt,
   }
