@@ -8,7 +8,7 @@ const { requireCapability, roomScope } = require('../middleware/rbac');
 const { paginationQuery, paginate, pageMeta } = require('../utils/pagination');
 const { audit } = require('../services/audit.service');
 const { upload, persistImages, removeFile } = require('../services/upload.service');
-const { loadAssignment, applyReturn, assertReturnable, comparableKeys, photoSummary, photoSets } = require('../services/return.service');
+const { loadAssignment, applyReturn, assertReturnable, comparableKeys, photoSummary, photoSets, buildReturnRecord, getUnreturned, resolveUnreturned, RESOLUTIONS } = require('../services/return.service');
 
 /**
  * BE-2 (return / handback comparison) + BE-3 (assignment-scoped timeline).
@@ -57,6 +57,13 @@ async function loadScoped(id, req) {
     if (!inScope) throw notFound('Assignment');
   }
   return assignment;
+}
+
+/** Room-scope guard only — 404 outside the scope, by the very rule loadScoped() applies (`scoped()` is its database
+ *  form, as the timeline uses it) — for the read endpoints that load their own, much smaller payload. */
+async function assertInScope(id, req) {
+  const found = await prisma.assignment.findFirst({ where: { id, ...scoped(roomScope(req.user)) }, select: { id: true } });
+  if (!found) throw notFound('Assignment');
 }
 
 // GET /api/v1/assignments/:id/return-form — pre-filled out-state snapshot (contract §8.1)
@@ -221,6 +228,76 @@ router.get(
       }),
     ]);
     res.json({ data: rows, meta: pageMeta(f, total) });
+  }),
+);
+
+/*
+ * Phase 9 P5a — the return record, the items that did not come back, and settling them.
+ * Route order: assignments.routes.js (mounted first, at the same /assignments prefix) only has the single-segment
+ * GET /:id plus POST /phone, /generic, /:id/activate and /:id/photos, and nothing in this router is a bare /:id —
+ * every path below ends in a fixed tail, so none of them can be shadowed by a /:id route.
+ */
+
+// GET /api/v1/assignments/:id/return-record — the second record of a returned assignment: items, comparison, what is
+// still owed, photos of both ends. 404 when the assignment was never returned; same room scope as the detail.
+router.get(
+  '/:id/return-record',
+  read,
+  validate({ params: idParams }),
+  asyncHandler(async (req, res) => {
+    await assertInScope(req.params.id, req); // 404 outside the TEAM_LEADER / CALL_CENTER_MANAGER room scope
+    const record = await buildReturnRecord(req.params.id);
+    if (!record) throw notFound('Return record'); // never returned (ACTIVE / DRAFT assignment)
+    res.json({ data: record });
+  }),
+);
+
+// GET /api/v1/assignments/:id/unreturned — the items that did not come back (OPEN) and the ones already settled
+// (RESOLVED), same entries as `unreturned` of the return record. An assignment that was not returned owes nothing: [].
+router.get(
+  '/:id/unreturned',
+  read,
+  validate({ params: idParams }),
+  asyncHandler(async (req, res) => {
+    await assertInScope(req.params.id, req);
+    res.json({ data: (await getUnreturned([req.params.id])).get(req.params.id) ?? [] });
+  }),
+);
+
+// POST /api/v1/assignments/:id/unreturned/resolve — ADMIN. Settle one OPEN item: RETURNED (it came back late — asset
+// AVAILABLE, holder cleared, `condition` applied when given; account unbound) or LOST (asset LOST / DISPOSED + note;
+// account deactivated and unbound). 400 when the item is not part of the assignment, 409 when it is not OPEN (also: a
+// second resolve). `condition` only means something for a RETURNED asset — it is ignored for LOST and for accounts.
+const resolveBody = z
+  .object({
+    assetId: z.uuid().nullish(),
+    accountId: z.uuid().nullish(),
+    resolution: z.enum(RESOLUTIONS),
+    condition: condition.nullish(),
+    notes: z.string().trim().max(1000).nullish(),
+  })
+  .strict()
+  .refine((b) => Boolean(b.assetId) !== Boolean(b.accountId), { message: 'Give exactly one of assetId or accountId', path: ['assetId'] });
+
+router.post(
+  '/:id/unreturned/resolve',
+  write,
+  validate({ params: idParams, body: resolveBody }),
+  asyncHandler(async (req, res) => {
+    const assignment = await loadScoped(req.params.id, req); // 404 for an unknown assignment
+    const { assetId, accountId, resolution, condition: toCondition, notes } = req.body;
+    const { item, unreturned, effects } = await resolveUnreturned(
+      assignment,
+      { assetId: assetId ?? null, accountId: accountId ?? null, resolution, condition: toCondition ?? null, notes: notes ?? null },
+      req.user,
+    );
+    await audit(req, 'assignment.unreturned.resolve', 'Assignment', assignment.id, {
+      assignmentCode: assignment.assignmentCode,
+      resolution,
+      ...(assetId ? { assetId } : { accountId }),
+      ...effects, // code, role, condition, notes + what changed (assetStatus, conditionFrom/To, accountActive)
+    });
+    res.json({ data: { assignmentId: assignment.id, assignmentCode: assignment.assignmentCode, item, unreturned } });
   }),
 );
 

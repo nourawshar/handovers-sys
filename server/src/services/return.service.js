@@ -1,4 +1,5 @@
 'use strict';
+const { AssetStatus } = require('@prisma/client');
 const prisma = require('../db');
 const { badRequest, conflict, notFound } = require('../utils/errors');
 
@@ -568,6 +569,397 @@ function assertReturnable(assignment) {
   return assignment;
 }
 
+/* ────────────────────────────────────────────────────────────────────────────────────────────
+ * Phase 9 P5a — the return record, the items that did not come back, and how an admin settles them
+ * ──────────────────────────────────────────────────────────────────────────────────────────── */
+
+/** `snapshot.kind` of the NOTE timeline entry that records how an unreturned item was settled. */
+const UNRETURNED_RESOLVED = 'UNRETURNED_RESOLVED';
+
+/** What an admin can decide about an item that did not come back. */
+const RESOLUTIONS = ['RETURNED', 'LOST'];
+
+/** Status of an asset declared LOST: `LOST` when the AssetStatus enum has it (it does not today), otherwise
+ *  `DISPOSED` — and resolveUnreturned() then also leaves a note on the asset, so the write-off can still be told
+ *  from an ordinary disposal. */
+const LOST_ASSET_STATUS = 'LOST' in AssetStatus ? 'LOST' : 'DISPOSED';
+
+/** Order the unreturned entries are listed in: asset roles (AssignmentItemRole order), the Bitrix account last. */
+const UNRETURNED_ROLE_ORDER = ['PRIMARY', 'SIM1', 'SIM2', 'CHARGER_CABLE', 'CHARGER_ADAPTER', 'BUNDLED', 'BITRIX'];
+const roleRank = (role) => {
+  const i = UNRETURNED_ROLE_ORDER.indexOf(role);
+  return i < 0 ? UNRETURNED_ROLE_ORDER.length : i;
+};
+
+/** assets.routes.js caps Asset.notes at 5000 characters; a note appended here must never push an asset past it. */
+const ASSET_NOTES_MAX = 5000;
+
+/** `map.get(key)`, creating the collection first when the key is new. */
+function bucket(map, key, make) {
+  let list = map.get(key);
+  if (!list) map.set(key, (list = make()));
+  return list;
+}
+
+/** Every asset an assignment involves → Map(assetId → role): its items, its primary asset and — as a safety net for
+ *  items carried only on the phone record — the SIM / charger assets of its PhoneAssignmentDetail. Takes an
+ *  assignment as loaded by loadAssignment() or getUnreturned() (needs assetId, items[{assetId, role}], phoneDetail). */
+function involvedAssets(assignment) {
+  const roles = new Map([[assignment.assetId, 'PRIMARY']]);
+  for (const item of assignment.items ?? []) roles.set(item.assetId, item.role);
+  for (const f of RETURN_ITEM_FIELDS) {
+    const id = assignment.phoneDetail?.[f.assetIdKey];
+    if (id && !roles.has(id)) roles.set(id, f.role);
+  }
+  return roles;
+}
+
+/** How a Bitrix (or other) account is named in an unreturned entry — the same naming describeUnreturned() uses. */
+const accountName = (a) => (a.email && a.email !== a.identifier ? a.email : a.kind === 'BITRIX' ? 'Bitrix account' : 'Account');
+
+/** Unreturned entries: owed (OPEN) first, then settled ones; each group by role order, then code. */
+const compareUnreturned = (x, y) =>
+  (x.status === y.status ? 0 : x.status === 'OPEN' ? -1 : 1) ||
+  roleRank(x.role) - roleRank(y.role) ||
+  String(x.code ?? '').localeCompare(String(y.code ?? ''));
+
+/**
+ * The items that did not come back from RETURNED assignments (Phase 9 P5a) — THE derivation, shared by the return
+ * record, the /unreturned endpoints, the assignment list summary and the asset's handover history.
+ *
+ * For an assignment with status RETURNED, an item is owed (status 'OPEN') when
+ *   ASSET    one of the assets the assignment involves is still ASSIGNED, is held by the assignment's employee and has
+ *            no active AssignmentItem elsewhere — nor was it handed over again later: an asset can only be handed over
+ *            again once it was released, so whatever an earlier assignment owed of it is settled (without this, a
+ *            charger the same employee takes out twice would be owed by BOTH of his assignments);
+ *   ACCOUNT  an account (Bitrix) is still bound to the assignment (Account.currentAssignmentId).
+ * An item that has a NOTE timeline entry `{ kind:'UNRETURNED_RESOLVED', assetId|accountId, resolution, condition, notes }`
+ * is 'RESOLVED' instead and stays listed whatever its state is now, so the history stays visible.
+ *
+ * Batched: at most three rounds of queries however many assignments are asked for (no N+1), so a list page can
+ * call it once for all its rows. An assignment that is not RETURNED (or does not exist) owes nothing.
+ *
+ * @param {string[]} assignmentIds
+ * @param {import('@prisma/client').Prisma.TransactionClient|typeof prisma} [db] inside a transaction pass its client
+ * @returns {Promise<Map<string, Array<{
+ *   kind: 'ASSET'|'ACCOUNT', assetId: string|null, accountId: string|null, code: string|null, name: string|null,
+ *   role: string|null, status: 'OPEN'|'RESOLVED',
+ *   resolution: null|{ kind: 'RETURNED'|'LOST', at: Date, by: { id: string, fullName: string }|null, notes: string|null, condition: string|null },
+ * }>>>} EVERY requested id is a key (an empty array when nothing is owed); entries: OPEN first, then by role, then code
+ */
+async function getUnreturned(assignmentIds, db = prisma) {
+  const ids = [...new Set((assignmentIds ?? []).filter(Boolean))];
+  const result = new Map(ids.map((id) => [id, []]));
+  if (!ids.length) return result;
+
+  // Round 1 — the RETURNED assignments with every asset they involve, and the resolutions recorded so far.
+  const [assignments, notes] = await Promise.all([
+    db.assignment.findMany({
+      where: { id: { in: ids }, status: 'RETURNED' },
+      select: {
+        id: true, employeeId: true, assetId: true, createdAt: true,
+        items: { select: { assetId: true, role: true } },
+        phoneDetail: { select: { sim1AssetId: true, sim2AssetId: true, chargerCableAssetId: true, chargerAdapterAssetId: true } },
+      },
+    }),
+    db.assignmentTimelineEntry.findMany({
+      where: { assignmentId: { in: ids }, eventType: 'NOTE', snapshot: { path: ['kind'], equals: UNRETURNED_RESOLVED } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { assignmentId: true, snapshot: true, createdAt: true, createdBy: { select: { id: true, fullName: true } } },
+    }),
+  ]);
+  if (!assignments.length) return result;
+  const returned = new Set(assignments.map((a) => a.id));
+
+  // The resolution of each (assignment, item) — the latest entry wins.
+  const resolutionOf = new Map(); // `${assignmentId}:${assetId|accountId}` → resolution
+  const resolvedAssetIds = new Set();
+  const resolvedAccountIds = new Set();
+  const resolvedAccountsOf = new Map(); // assignmentId → Set(accountId)
+  for (const n of notes) {
+    const s = n.snapshot;
+    const target = s?.assetId ?? s?.accountId;
+    if (!returned.has(n.assignmentId) || typeof target !== 'string' || !RESOLUTIONS.includes(s.resolution)) continue;
+    resolutionOf.set(`${n.assignmentId}:${target}`, {
+      kind: s.resolution,
+      at: n.createdAt,
+      by: n.createdBy ? { id: n.createdBy.id, fullName: n.createdBy.fullName } : null,
+      notes: s.notes ?? null,
+      condition: s.condition ?? null,
+    });
+    if (s.assetId) resolvedAssetIds.add(s.assetId);
+    else {
+      resolvedAccountIds.add(s.accountId);
+      bucket(resolvedAccountsOf, n.assignmentId, () => new Set()).add(s.accountId);
+    }
+  }
+
+  // Round 2 — the assets that could be owed (still ASSIGNED to one of these employees) or were settled, and the accounts
+  // that are bound to one of these assignments or were settled.
+  const involved = new Map(assignments.map((a) => [a.id, involvedAssets(a)]));
+  const involvedAssetIds = new Set([...involved.values()].flatMap((roles) => [...roles.keys()]));
+  const employeeIds = [...new Set(assignments.map((a) => a.employeeId))];
+  const [assets, accounts] = await Promise.all([
+    db.asset.findMany({
+      where: {
+        OR: [
+          { id: { in: [...resolvedAssetIds] } },
+          { id: { in: [...involvedAssetIds] }, status: 'ASSIGNED', currentHolderEmployeeId: { in: employeeIds } },
+        ],
+      },
+      select: { id: true, code: true, name: true, status: true, currentHolderEmployeeId: true },
+    }),
+    db.account.findMany({
+      where: { OR: [{ currentAssignmentId: { in: [...returned] } }, { id: { in: [...resolvedAccountIds] } }] },
+      select: { id: true, kind: true, identifier: true, email: true, currentAssignmentId: true },
+    }),
+  ]);
+  const assetById = new Map(assets.map((x) => [x.id, x]));
+  const accountById = new Map(accounts.map((x) => [x.id, x]));
+  const stillHeld = (a, assetId) => {
+    const x = assetById.get(assetId);
+    return Boolean(x) && x.status === 'ASSIGNED' && x.currentHolderEmployeeId === a.employeeId;
+  };
+
+  // Round 3 — only for the assets that still look owed: were they handed over again (active item, or a newer assignment)?
+  const candidates = new Set();
+  for (const a of assignments) for (const assetId of involved.get(a.id).keys()) if (stillHeld(a, assetId)) candidates.add(assetId);
+  const itemRows = candidates.size
+    ? await db.assignmentItem.findMany({
+        where: { assetId: { in: [...candidates] } },
+        select: { assetId: true, assignmentId: true, isActive: true, assignment: { select: { createdAt: true } } },
+      })
+    : [];
+  const itemsOfAsset = new Map();
+  for (const row of itemRows) bucket(itemsOfAsset, row.assetId, () => []).push(row);
+  const handedOverAgain = (a, assetId) =>
+    (itemsOfAsset.get(assetId) ?? []).some((i) => i.assignmentId !== a.id && (i.isActive || i.assignment.createdAt > a.createdAt));
+
+  const boundTo = new Map(); // assignmentId → the accounts still bound to it
+  for (const account of accounts) if (account.currentAssignmentId) bucket(boundTo, account.currentAssignmentId, () => []).push(account);
+
+  for (const a of assignments) {
+    const entries = result.get(a.id);
+    for (const [assetId, role] of involved.get(a.id)) {
+      const asset = assetById.get(assetId);
+      const resolution = resolutionOf.get(`${a.id}:${assetId}`) ?? null;
+      if (!asset || (!resolution && (!stillHeld(a, assetId) || handedOverAgain(a, assetId)))) continue;
+      entries.push({ kind: 'ASSET', assetId, accountId: null, code: asset.code, name: asset.name, role, status: resolution ? 'RESOLVED' : 'OPEN', resolution });
+    }
+    const accountIds = new Set([...(boundTo.get(a.id) ?? []).map((x) => x.id), ...(resolvedAccountsOf.get(a.id) ?? [])]);
+    for (const accountId of accountIds) {
+      const account = accountById.get(accountId);
+      if (!account) continue;
+      const resolution = resolutionOf.get(`${a.id}:${accountId}`) ?? null;
+      entries.push({
+        kind: 'ACCOUNT', assetId: null, accountId, code: account.identifier, name: accountName(account), role: account.kind,
+        status: resolution ? 'RESOLVED' : 'OPEN', resolution,
+      });
+    }
+    entries.sort(compareUnreturned);
+  }
+  return result;
+}
+
+/** A value stored in ReturnComparisonField: applyReturn() wrote it as JSON text into the JSON column, so the column
+ *  holds the string `"GOOD"` (quotes included) — decode it back to the scalar the comparison carried. */
+function decodeStored(value) {
+  if (typeof value !== 'string') return value ?? null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value; // not JSON text (an older row): the string itself
+  }
+}
+
+/**
+ * The return record of an assignment (Phase 9 P5a): what came back, in which condition, what differs from the
+ * handover, what is still owed and the photos of both ends — or null when the assignment was never returned (no
+ * ReturnRecord). Room scoping is the caller's job (the route checks it before calling this).
+ * `items[].returned` is false for an asset that did not come back and is still owed (OPEN) or was written off as
+ * LOST; the owed / settled detail is in `unreturned` (see getUnreturned()). `comparison` is the full field list, in
+ * the order and shape of the `comparison` the return itself answered with.
+ */
+async function buildReturnRecord(assignmentId, db = prisma) {
+  const a = await db.assignment.findUnique({
+    where: { id: assignmentId },
+    select: {
+      id: true,
+      assignmentCode: true,
+      employee: { select: { id: true, fullName: true, departmentTeam: { select: { id: true, name: true } }, room: { select: { id: true, code: true } } } },
+      workIdentity: { select: { id: true, name: true } },
+      items: {
+        orderBy: [{ role: 'asc' }, { asset: { code: 'asc' } }],
+        select: { assetId: true, role: true, conditionAtHandover: true, returnCondition: true, asset: { select: { code: true, name: true, serialNumber: true } } },
+      },
+      photos: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true, type: true, context: true, assetId: true } },
+      returnRecords: {
+        orderBy: { returnedAt: 'desc' },
+        take: 1, // one return per assignment (claimed atomically); the newest if a legacy row ever says otherwise
+        select: {
+          id: true, returnedAt: true, returnCondition: true, returnNotes: true,
+          returnedBy: { select: { id: true, fullName: true } },
+          comparisonFields: { select: { fieldKey: true, label: true, valueAtHandover: true, valueAtReturn: true, isDiscrepancy: true, severity: true } },
+        },
+      },
+    },
+  });
+  const record = a?.returnRecords[0];
+  if (!record) return null;
+
+  const unreturned = (await getUnreturned([a.id], db)).get(a.id) ?? [];
+  const notBack = new Set(unreturned.filter((u) => u.kind === 'ASSET' && (u.status === 'OPEN' || u.resolution?.kind === 'LOST')).map((u) => u.assetId));
+
+  const fieldRank = new Map(COMPARABLE_FIELDS.map((f, i) => [f.key, i]));
+  const rank = (key) => fieldRank.get(key) ?? COMPARABLE_FIELDS.length;
+  const comparison = [...record.comparisonFields]
+    .sort((x, y) => rank(x.fieldKey) - rank(y.fieldKey))
+    .map((c) => ({
+      fieldKey: c.fieldKey,
+      label: c.label,
+      valueAtHandover: decodeStored(c.valueAtHandover),
+      valueAtReturn: decodeStored(c.valueAtReturn),
+      isDiscrepancy: c.isDiscrepancy,
+      severity: c.severity,
+    }));
+
+  const photo = (p) => ({ id: p.id, type: p.type, assetId: p.assetId ?? null, url: `/api/v1/photos/${p.id}/file` });
+  return {
+    id: record.id,
+    assignmentId: a.id,
+    assignmentCode: a.assignmentCode,
+    returnedAt: record.returnedAt,
+    returnedBy: record.returnedBy,
+    returnCondition: record.returnCondition,
+    returnNotes: record.returnNotes,
+    employee: { id: a.employee.id, fullName: a.employee.fullName, department: a.employee.departmentTeam ?? null, room: a.employee.room ?? null },
+    workIdentity: a.workIdentity ?? null,
+    items: a.items.map((i) => ({
+      assetId: i.assetId,
+      code: i.asset.code,
+      name: i.asset.name,
+      role: i.role,
+      serialNumber: i.asset.serialNumber ?? null,
+      conditionAtHandover: i.conditionAtHandover,
+      returnCondition: i.returnCondition ?? null,
+      returned: !notBack.has(i.assetId),
+    })),
+    comparison,
+    hasDiscrepancies: comparison.some((c) => c.isDiscrepancy),
+    unreturned,
+    photos: {
+      handover: a.photos.filter((p) => p.context !== 'RETURN').map(photo),
+      return: a.photos.filter((p) => p.context === 'RETURN').map(photo),
+    },
+  };
+}
+
+/** `notes` with `line` appended on a new line — left unchanged when that would exceed the asset notes limit. */
+function appendAssetNote(notes, line) {
+  const next = notes ? `${notes}\n${line}` : line;
+  return next.length <= ASSET_NOTES_MAX ? next : notes;
+}
+
+/**
+ * Settle one item that did not come back (Phase 9 P5a), atomically. `assignment` is the hydrated assignment from
+ * loadAssignment(); exactly one of assetId / accountId. Checks, in this order: the item belongs to the assignment
+ * (400), it is OPEN right now (409 — derived again under a per-assignment lock, so of two racing requests only the
+ * first succeeds). Then, in one transaction:
+ *   RETURNED  asset   → status AVAILABLE (DISPOSED when it comes back in condition DISPOSED, the rule a return uses),
+ *                       holder cleared, `condition` set when given (+ an UPDATED entry on the asset's timeline
+ *                       { field:'condition', from, to, assignmentCode, reason:'return-resolved' } when it changes);
+ *             account → unbound (currentAssignmentId null);
+ *   LOST      asset   → status LOST when the enum has it, else DISPOSED + a note on the asset; holder cleared; its
+ *                       condition is left alone (nobody has seen it);
+ *             account → unbound and deactivated (isActive false);
+ *   always    a NOTE entry on the assignment's timeline, `snapshot { kind:'UNRETURNED_RESOLVED', assetId|accountId,
+ *             resolution, condition, notes }` — that entry is what makes the item RESOLVED. `condition` is the one that
+ *             was applied: only a RETURNED asset takes one, it is ignored (recorded as null) otherwise.
+ * The asset keeps its last known room (as on any return). The caller writes the audit row.
+ * @returns {Promise<{ item: object|null, unreturned: object[], effects: object }>} the settled entry (as getUnreturned()
+ *   lists it now), the assignment's full unreturned list, and what was changed (for the audit trail)
+ */
+async function resolveUnreturned(assignment, { assetId = null, accountId = null, resolution, condition = null, notes = null }, user) {
+  if (!RESOLUTIONS.includes(resolution)) throw badRequest(`resolution must be one of: ${RESOLUTIONS.join(', ')}`);
+  if (Boolean(assetId) === Boolean(accountId)) throw badRequest('Give exactly one of assetId or accountId');
+  if (condition != null && !CONDITIONS.includes(condition)) throw badRequest(`condition must be one of: ${CONDITIONS.join(', ')}`);
+  const note = typeof notes === 'string' && notes.trim() ? notes.trim() : null;
+
+  // 400 — the item has to belong to this assignment.
+  let label; // what the item is called in messages
+  if (assetId) {
+    if (!involvedAssets(assignment).has(assetId)) throw badRequest('assetId is not an item of this assignment');
+    label = (assignment.items ?? []).find((i) => i.assetId === assetId)?.asset?.code ?? assetId;
+  } else {
+    const account = await prisma.account.findUnique({ where: { id: accountId }, select: { identifier: true, currentAssignmentId: true } });
+    if (!account || (account.currentAssignmentId !== assignment.id && assignment.phoneDetail?.bitrixAccountId !== accountId)) {
+      throw badRequest('accountId is not an account of this assignment');
+    }
+    label = account.identifier;
+  }
+  const isTarget = (e) => (assetId ? e.assetId === assetId : e.accountId === accountId);
+
+  const effects = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`unreturned-resolve:${assignment.id}`}))`;
+
+    // 409 — it has to be owed right now.
+    const entry = ((await getUnreturned([assignment.id], tx)).get(assignment.id) ?? []).find(isTarget);
+    if (!entry) throw conflict(`"${label}" is not an open unreturned item of assignment ${assignment.assignmentCode}`);
+    if (entry.status !== 'OPEN') throw conflict(`"${label}" of assignment ${assignment.assignmentCode} was already resolved (${entry.resolution.kind})`);
+
+    const base = { assignmentId: assignment.id, employeeId: assignment.employeeId, workIdentityId: assignment.workIdentityId ?? null, createdById: user.id };
+    const changed = {};
+    let appliedCondition = null;
+
+    if (assetId) {
+      const asset = await tx.asset.findUniqueOrThrow({ where: { id: assetId }, select: { condition: true, notes: true } });
+      const data = { currentHolderEmployeeId: null };
+      if (resolution === 'RETURNED') {
+        const to = condition ?? asset.condition;
+        data.status = statusForReturnedCondition(to);
+        if (to !== asset.condition) data.condition = to;
+        appliedCondition = condition;
+      } else {
+        data.status = LOST_ASSET_STATUS;
+        if (LOST_ASSET_STATUS !== 'LOST') {
+          const day = new Date().toISOString().slice(0, 10);
+          data.notes = appendAssetNote(asset.notes, `Lost — not returned from assignment ${assignment.assignmentCode} (${day}).${note ? ` ${note}` : ''}`);
+        }
+      }
+      // compare-and-swap on the state the derivation saw: nothing else may have released or moved the asset meanwhile
+      const { count } = await tx.asset.updateMany({ where: { id: assetId, status: 'ASSIGNED', currentHolderEmployeeId: assignment.employeeId }, data });
+      if (count !== 1) throw conflict(`"${label}" changed while it was being resolved — reload and try again`);
+      if (data.condition) {
+        await tx.assignmentTimelineEntry.create({
+          data: { ...base, assetId, eventType: 'UPDATED', snapshot: { field: 'condition', from: asset.condition, to: data.condition, assignmentCode: assignment.assignmentCode, reason: 'return-resolved' } },
+        });
+        Object.assign(changed, { conditionFrom: asset.condition, conditionTo: data.condition });
+      }
+      changed.assetStatus = data.status;
+    } else {
+      const data = { currentAssignmentId: null, ...(resolution === 'LOST' ? { isActive: false } : {}) };
+      const { count } = await tx.account.updateMany({ where: { id: accountId, currentAssignmentId: assignment.id }, data });
+      if (count !== 1) throw conflict(`"${label}" changed while it was being resolved — reload and try again`);
+      changed.accountActive = data.isActive ?? true;
+    }
+
+    // An account has no asset of its own: its entry hangs off the assignment's primary asset, like the other
+    // assignment-level entries do (the column is required).
+    await tx.assignmentTimelineEntry.create({
+      data: {
+        ...base,
+        assetId: assetId ?? assignment.assetId,
+        eventType: 'NOTE',
+        snapshot: { kind: UNRETURNED_RESOLVED, ...(assetId ? { assetId } : { accountId }), resolution, condition: appliedCondition, notes: note },
+      },
+    });
+    return { ...changed, code: entry.code, role: entry.role, condition: appliedCondition, notes: note };
+  });
+
+  const unreturned = (await getUnreturned([assignment.id])).get(assignment.id) ?? [];
+  return { item: unreturned.find(isTarget) ?? null, unreturned, effects };
+}
+
 module.exports = {
   COMPARABLE_FIELDS,
   comparableKeys,
@@ -579,4 +971,11 @@ module.exports = {
   assertReturnable,
   photoSummary,
   photoSets,
+  // Phase 9 P5a
+  RESOLUTIONS,
+  UNRETURNED_RESOLVED,
+  LOST_ASSET_STATUS,
+  getUnreturned,
+  buildReturnRecord,
+  resolveUnreturned,
 };
