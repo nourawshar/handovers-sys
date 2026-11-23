@@ -45,11 +45,36 @@ const patchBody = z
   .partial()
   .strict();
 
+/**
+ * Phase 9 / P2 — `sort` + `order` on the list. The key is whitelisted (an unknown one is a 400 VALIDATION_ERROR that
+ * names the allowed keys). Default = newest first (it was username asc before Phase 9).
+ */
+const SORT_KEYS = ['createdAt', 'username', 'fullName', 'role'];
+const sortQuery = {
+  sort: z.enum(SORT_KEYS, { error: `Unknown sort key. Allowed: ${SORT_KEYS.join(', ')}` }).default('createdAt'),
+  order: z.enum(['asc', 'desc'], { error: 'Invalid order. Allowed: asc, desc' }).default('desc'),
+};
+
+/**
+ * Prisma orderBy for a sort key: the key itself, then username as the natural tie-break (the former default order) and
+ * ALWAYS `id` last, so rows with equal values page deterministically. `role` follows the enum's declaration order
+ * (ADMIN, MANAGER, TEAM_LEADER, CALL_CENTER_MANAGER) — the order PostgreSQL gives an enum column.
+ */
+const orderByFor = (sort, dir) => [
+  ...{
+    createdAt: [{ createdAt: dir }, { username: 'asc' }],
+    username: [{ username: dir }],
+    fullName: [{ fullName: dir }, { username: 'asc' }],
+    role: [{ role: dir }, { username: 'asc' }],
+  }[sort],
+  { id: 'asc' },
+];
+
 router.get(
   '/',
-  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().optional(), role: role.optional(), isActive: boolQuery.optional() }) }),
+  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().optional(), role: role.optional(), isActive: boolQuery.optional(), ...sortQuery }) }),
   asyncHandler(async (req, res) => {
-    const { q, role: r, isActive } = req.validQuery;
+    const { q, role: r, isActive, sort, order } = req.validQuery;
     const where = {
       ...(r && { role: r }),
       ...(isActive !== undefined && { isActive }),
@@ -57,7 +82,7 @@ router.get(
     };
     const [total, data] = await Promise.all([
       prisma.user.count({ where }),
-      prisma.user.findMany({ where, select, orderBy: { username: 'asc' }, ...paginate(req.validQuery) }),
+      prisma.user.findMany({ where, select, orderBy: orderByFor(sort, order), ...paginate(req.validQuery) }),
     ]);
     res.json({ data, meta: pageMeta(req.validQuery, total) });
   }),

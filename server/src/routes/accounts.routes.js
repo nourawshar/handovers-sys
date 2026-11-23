@@ -55,23 +55,80 @@ async function assertAssetFree(assetId, exceptAccountId) {
   if (used && used.id !== exceptAccountId) throw conflict('That asset is already linked to another account');
 }
 
+/**
+ * Phase 9 / P2 — `sort` + `order` on the list. The key is whitelisted (an unknown one is a 400 VALIDATION_ERROR that
+ * names the allowed keys). Default = newest first, so the account that was just added is on page 1.
+ */
+const SORT_KEYS = ['createdAt', 'identifier', 'email', 'kind', 'isActive'];
+const sortQuery = {
+  sort: z.enum(SORT_KEYS, { error: `Unknown sort key. Allowed: ${SORT_KEYS.join(', ')}` }).default('createdAt'),
+  order: z.enum(['asc', 'desc'], { error: 'Invalid order. Allowed: asc, desc' }).default('desc'),
+};
+
+/**
+ * Prisma orderBy for a sort key: the key itself, then a natural tie-break (the former default order, kind → identifier)
+ * and ALWAYS `id` last, so rows with equal values page deterministically. Accounts without an email sort last either way.
+ */
+const orderByFor = (sort, dir) => [
+  ...{
+    createdAt: [{ createdAt: dir }],
+    identifier: [{ identifier: dir }, { kind: 'asc' }],
+    email: [{ email: { sort: dir, nulls: 'last' } }, { identifier: 'asc' }],
+    kind: [{ kind: dir }, { identifier: 'asc' }],
+    isActive: [{ isActive: dir }, { kind: 'asc' }, { identifier: 'asc' }],
+  }[sort],
+  { id: 'asc' },
+];
+
+/**
+ * Ids of the accounts whose email is the WhatsApp backup address (wa1 / wa2) of an ACTIVE phone assignment. The
+ * assignment keeps that address as plain text (no foreign key), so the match is on the trimmed, lower-cased address.
+ * Both sets are small (one row per active phone / per account), so this is done in memory rather than in raw SQL.
+ */
+async function backupInUseAccountIds() {
+  const [details, accounts] = await Promise.all([
+    prisma.phoneAssignmentDetail.findMany({
+      where: { assignment: { status: 'ACTIVE' }, OR: [{ wa1BackupEmail: { not: null } }, { wa2BackupEmail: { not: null } }] },
+      select: { wa1BackupEmail: true, wa2BackupEmail: true },
+    }),
+    prisma.account.findMany({ where: { email: { not: null } }, select: { id: true, email: true } }),
+  ]);
+  const used = new Set(details.flatMap((d) => [d.wa1BackupEmail, d.wa2BackupEmail]).filter(Boolean).map((e) => e.trim().toLowerCase()));
+  return accounts.filter((a) => used.has(a.email.trim().toLowerCase())).map((a) => a.id);
+}
+
 router.get(
   '/',
   read,
-  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), kind: kind.optional(), identifier: z.string().trim().min(1).max(200).optional(), isActive: boolQuery.optional(), isWhatsAppBackup: boolQuery.optional(), inUse: boolQuery.optional() }) }),
+  validate({
+    query: z.object({
+      ...paginationQuery,
+      q: z.string().trim().max(100).optional(),
+      kind: kind.optional(),
+      identifier: z.string().trim().min(1).max(200).optional(),
+      isActive: boolQuery.optional(),
+      isWhatsAppBackup: boolQuery.optional(),
+      inUse: boolQuery.optional(),
+      /** true = email is the backup address of an ACTIVE WhatsApp handover; false = it is not. */
+      backupInUse: boolQuery.optional(),
+      ...sortQuery,
+    }),
+  }),
   asyncHandler(async (req, res) => {
     const f = req.validQuery;
+    const backupIds = f.backupInUse === undefined ? null : await backupInUseAccountIds();
     const where = {
       ...(f.kind && { kind: f.kind }),
       ...(f.identifier && { identifier: f.identifier }),
       ...(f.isActive !== undefined && { isActive: f.isActive }),
       ...(f.isWhatsAppBackup !== undefined && { isWhatsAppBackup: f.isWhatsAppBackup }),
       ...(f.inUse !== undefined && { currentAssignmentId: f.inUse ? { not: null } : null }),
+      ...(backupIds && { id: f.backupInUse ? { in: backupIds } : { notIn: backupIds } }),
       ...(f.q && { OR: [{ identifier: { contains: f.q, mode: 'insensitive' } }, { email: { contains: f.q, mode: 'insensitive' } }, { subcategory: { contains: f.q, mode: 'insensitive' } }] }),
     };
     const [total, rows] = await Promise.all([
       prisma.account.count({ where }),
-      prisma.account.findMany({ where, select: publicSelect, orderBy: [{ kind: 'asc' }, { identifier: 'asc' }], ...paginate(f) }),
+      prisma.account.findMany({ where, select: publicSelect, orderBy: orderByFor(f.sort, f.order), ...paginate(f) }),
     ]);
     res.json({ data: rows.map(shape), meta: pageMeta(f, total) });
   }),

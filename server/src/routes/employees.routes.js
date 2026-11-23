@@ -77,10 +77,43 @@ function scopeWhere(user, f = {}) {
   return byRoom ? { AND: [inScope, byRoom] } : inScope;
 }
 
+/**
+ * Phase 9 / P2 — `sort` + `order` on the list. The key is whitelisted (an unknown one is a 400 VALIDATION_ERROR that
+ * names the allowed keys). Default = fullName asc, as before.
+ * `name` / `lastAdded` are the pre-Phase-9 values the current Employees page still sends: accepted, but not advertised
+ * (`name` = fullName asc, `lastAdded` = createdAt desc — unless an explicit `order` is given).
+ */
+const SORT_KEYS = ['fullName', 'createdAt', 'department', 'room'];
+const LEGACY_SORT = { name: { sort: 'fullName', order: 'asc' }, lastAdded: { sort: 'createdAt', order: 'desc' } };
+const sortQuery = {
+  sort: z.enum([...SORT_KEYS, ...Object.keys(LEGACY_SORT)], { error: `Unknown sort key. Allowed: ${SORT_KEYS.join(', ')}` }).default('fullName'),
+  order: z.enum(['asc', 'desc'], { error: 'Invalid order. Allowed: asc, desc' }).optional(), // default asc (legacy `lastAdded`: desc)
+};
+
+/**
+ * Prisma orderBy for the validated query: the key itself, then fullName as the natural tie-break and ALWAYS `id` last,
+ * so rows with equal values page deterministically. `department` sorts by the department's name and `room` by the room
+ * code through the relation; employees without a room are NULLs, which PostgreSQL puts last when asc, first when desc.
+ */
+function orderByFor(f) {
+  const legacy = LEGACY_SORT[f.sort];
+  const sort = legacy?.sort ?? f.sort;
+  const dir = f.order ?? legacy?.order ?? 'asc';
+  return [
+    ...{
+      fullName: [{ fullName: dir }],
+      createdAt: [{ createdAt: dir }, { fullName: 'asc' }],
+      department: [{ departmentTeam: { name: dir } }, { fullName: 'asc' }],
+      room: [{ room: { code: dir } }, { fullName: 'asc' }],
+    }[sort],
+    { id: 'asc' },
+  ];
+}
+
 router.get(
   '/',
   read,
-  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), roomId: z.uuid().optional(), departmentTeamId: z.uuid().optional(), sort: z.enum(['name', 'lastAdded']).optional() }) }),
+  validate({ query: z.object({ ...paginationQuery, q: z.string().trim().max(100).optional(), roomId: z.uuid().optional(), departmentTeamId: z.uuid().optional(), ...sortQuery }) }),
   asyncHandler(async (req, res) => {
     const f = req.validQuery;
     const where = { ...scopeWhere(req.user, f), ...(f.departmentTeamId && { departmentTeamId: f.departmentTeamId }), ...(f.q && { fullName: { contains: f.q, mode: 'insensitive' } }) };
@@ -88,7 +121,7 @@ router.get(
       prisma.employee.count({ where }),
       prisma.employee.findMany({
         where,
-        orderBy: f.sort === 'lastAdded' ? { createdAt: 'desc' } : { fullName: 'asc' },
+        orderBy: orderByFor(f),
         include: detailInclude,
         ...paginate(f),
       }),

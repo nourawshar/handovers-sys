@@ -23,6 +23,31 @@ function createdAtUpTo(to) {
   return DATE_ONLY.test(t) ? { lt: new Date(d.getTime() + DAY_MS) } : { lte: d };
 }
 
+/**
+ * Phase 9 / P2 — `sort` + `order`. The key is whitelisted (an unknown one is a 400 VALIDATION_ERROR that names the
+ * allowed keys). Default = newest first, as before.
+ */
+const SORT_KEYS = ['createdAt', 'action', 'actor'];
+const sortQuery = {
+  sort: z.enum(SORT_KEYS, { error: `Unknown sort key. Allowed: ${SORT_KEYS.join(', ')}` }).default('createdAt'),
+  order: z.enum(['asc', 'desc'], { error: 'Invalid order. Allowed: asc, desc' }).default('desc'),
+};
+
+/**
+ * Prisma orderBy for a sort key: the key itself, then newest first inside equal values (an audit trail is read
+ * newest-first) and ALWAYS `id` last, so rows with equal values page deterministically. `actor` sorts by the actor's
+ * full name through the relation; entries without an actor (system events) are NULLs, which PostgreSQL puts last
+ * when asc, first when desc.
+ */
+const orderByFor = (sort, dir) => [
+  ...{
+    createdAt: [{ createdAt: dir }],
+    action: [{ action: dir }, { createdAt: 'desc' }],
+    actor: [{ actor: { fullName: dir } }, { createdAt: 'desc' }],
+  }[sort],
+  { id: 'asc' },
+];
+
 const listQuery = z.object({
   ...paginationQuery,
   actorId: z.uuid().optional(),
@@ -32,6 +57,7 @@ const listQuery = z.object({
   from: z.string().refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid from date').optional(),
   to: z.string().refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid to date').optional(),
   q: z.string().trim().max(100).optional(),
+  ...sortQuery,
 });
 
 // GET /api/v1/audit-logs — paginated, filterable audit trail (contract §8 extension).
@@ -59,7 +85,7 @@ router.get(
       prisma.auditLog.count({ where }),
       prisma.auditLog.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: orderByFor(f.sort, f.order),
         include: { actor: { select: { id: true, fullName: true, username: true } } },
         ...paginate(f),
       }),
