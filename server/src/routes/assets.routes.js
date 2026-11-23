@@ -10,13 +10,17 @@ const { audit } = require('../services/audit.service');
 const { upload, persistImages, removeFile } = require('../services/upload.service');
 const svc = require('../services/asset.service');
 const { assignmentScopeWhere } = require('../services/assignment.service');
+const { getUnreturned } = require('../services/return.service');
 
 const router = express.Router();
 const read = requireCapability('inventory:read');
 const write = requireCapability('inventory:write');
 
 const idParams = z.object({ id: z.uuid() });
-const condition = z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED']);
+/** Conditions ranked best → worst: NEW > GOOD > FAIR > POOR > DAMAGED > DISPOSED. The position is the rank (handover-history
+ *  `change`); it is also the enum's declaration order, which is the order PostgreSQL gives `sort=condition`. */
+const CONDITION_RANK = ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED'];
+const condition = z.enum(CONDITION_RANK);
 // ASSIGNED / RETURNED are owned by the assignment lifecycle (Phase 2/3) and cannot be set by hand.
 const manualStatus = z.enum(['AVAILABLE', 'IN_REPAIR', 'DISPOSED']);
 const status = z.enum(['AVAILABLE', 'ASSIGNED', 'RETURNED', 'DISPOSED', 'IN_REPAIR']);
@@ -65,6 +69,36 @@ const patchBody = z
   .partial()
   .strict();
 
+/**
+ * Phase 9 / P2 — `sort` + `order` on the list. The key is whitelisted (an unknown one is a 400 VALIDATION_ERROR that
+ * names the allowed keys). Default = newest first, as before. `updatedAt` is the pre-Phase-9 key: still accepted so
+ * nothing that used it breaks, but not advertised.
+ */
+const SORT_KEYS = ['createdAt', 'code', 'name', 'condition', 'status', 'category'];
+const sortQuery = {
+  sort: z.enum([...SORT_KEYS, 'updatedAt'], { error: `Unknown sort key. Allowed: ${SORT_KEYS.join(', ')}` }).default('createdAt'),
+  order: z.enum(['asc', 'desc'], { error: 'Invalid order. Allowed: asc, desc' }).default('desc'),
+};
+
+/**
+ * Prisma orderBy for a sort key: the key itself, then the asset code as the natural tie-break (so a column of equal
+ * conditions / statuses reads in code order) and ALWAYS `id` last, so rows with equal values page deterministically.
+ * `category` sorts by the category's name through the relation; `condition` and `status` follow the enum's declaration
+ * order (best → worst condition, the lifecycle order of the status) — the order PostgreSQL gives an enum column.
+ */
+const orderByFor = (sort, dir) => [
+  ...{
+    createdAt: [{ createdAt: dir }],
+    updatedAt: [{ updatedAt: dir }],
+    code: [{ code: dir }],
+    name: [{ name: dir }, { code: 'asc' }],
+    condition: [{ condition: dir }, { code: 'asc' }],
+    status: [{ status: dir }, { code: 'asc' }],
+    category: [{ category: { name: dir } }, { code: 'asc' }],
+  }[sort],
+  { id: 'asc' },
+];
+
 const listQuery = z.object({
   ...paginationQuery,
   q: z.string().trim().max(100).optional(),
@@ -75,8 +109,7 @@ const listQuery = z.object({
   status: status.optional(),
   roomId: z.uuid().optional(),
   holderId: z.uuid().optional(),
-  sort: z.enum(['code', 'name', 'createdAt', 'updatedAt', 'condition', 'status']).default('createdAt'),
-  order: z.enum(['asc', 'desc']).default('desc'),
+  ...sortQuery,
 });
 
 /** The asset's own gallery: inventory photos uploaded to the asset itself (POST /assets/:id/photos). Photos taken
@@ -143,13 +176,15 @@ function recordConditionEdit(tx, req, assetId, from, to) {
 }
 
 /** `source` of a condition timeline entry. The handover write-back tags its entries reason 'handover' (the spec text
- *  also calls it 'delivery') → 'delivery'; 'return' → 'return'. The return flow predates the tag: its entries are
- *  UPDATED, carry an assignmentCode and no reason → 'return'. Anything else (another reason, or no assignment behind
- *  the entry) is a hand edit → 'manual'. */
+ *  also calls it 'delivery') → 'delivery'; 'return' → 'return', and so does 'return-resolved' — the entry written when
+ *  an item that did not come back with the others is settled later as RETURNED (POST /assignments/:id/unreturned/resolve),
+ *  which is still a return of that assignment (its assignmentCode is on the entry). The return flow predates the tag:
+ *  its entries are UPDATED, carry an assignmentCode and no reason → 'return'. Anything else (another reason, or no
+ *  assignment behind the entry) is a hand edit → 'manual'. */
 function conditionEntrySource({ eventType, snapshot }) {
   const { reason, assignmentCode } = snapshot ?? {};
   if (reason === 'handover' || reason === 'delivery') return 'delivery';
-  if (reason === 'return') return 'return';
+  if (reason === 'return' || reason === 'return-resolved') return 'return';
   if (reason == null && eventType === 'UPDATED' && assignmentCode) return 'return';
   return 'manual';
 }
@@ -220,6 +255,85 @@ async function loadPhotoHistory(assetId, user) {
   return blocks.sort((x, y) => y.at - x.at || y.createdAt - x.createdAt || y.row.assignmentCode.localeCompare(x.row.assignmentCode)).map((b) => b.row);
 }
 
+/** How an item's condition changed between its handover and its return, by CONDITION_RANK (best → worst): 'same',
+ *  'worse' (it came back in a worse condition), 'better' — or 'unknown' when there is no (valid) condition at one end
+ *  of the comparison, i.e. the item was not returned yet or no return condition was recorded. */
+function conditionChange(atHandover, atReturn) {
+  const from = CONDITION_RANK.indexOf(atHandover);
+  const to = CONDITION_RANK.indexOf(atReturn);
+  if (from < 0 || to < 0) return 'unknown';
+  return to === from ? 'same' : to > from ? 'worse' : 'better';
+}
+
+/** handover-history (Phase 9 P5b): the asset's condition over its handovers — one row per assignment this asset was
+ *  an item of (an AssignmentItem row), newest first (assignedAt, else createdAt — the order of photoHistory).
+ *    conditionAtHandover / returnCondition   the item's own values; `change` ranks them (conditionChange)
+ *    returnNotes / discrepancyCount          the assignment's latest ReturnRecord: its notes, and how many of its
+ *                                            comparison fields are discrepancies (whole assignment, not just this item)
+ *    unreturnedOpen                          this asset still has to be handed back from that assignment (getUnreturned)
+ *    photoCount                              the assignment's photos tagged with this asset, plus — when it is the
+ *                                            assignment's PRIMARY item — the whole-handover / whole-return ones (photoHistory's rule)
+ *  An item that came back late (settled as RETURNED after the return, with a condition) keeps AssignmentItem.returnCondition
+ *  empty — the late condition is recorded in the resolution — so that condition is reported as its returnCondition.
+ *  Like photoHistory, a scoped user (TEAM_LEADER / CALL_CENTER_MANAGER) only gets the assignments they may open
+ *  themselves (assignment room rule). Constant number of queries: no per-row lookups. */
+async function loadHandoverHistory(assetId, user) {
+  const scope = roomScope(user);
+  const ofThisAsset = { OR: [{ assetId }, { assetId: null }] };
+  const items = await prisma.assignmentItem.findMany({
+    where: { assetId, ...(scope && { assignment: assignmentScopeWhere(scope) }) },
+    select: {
+      role: true,
+      conditionAtHandover: true,
+      returnCondition: true,
+      assignment: {
+        select: {
+          id: true, assignmentCode: true, status: true, assignedAt: true, returnedAt: true, createdAt: true,
+          employee: { select: { id: true, fullName: true } },
+          returnRecords: {
+            orderBy: [{ returnedAt: 'desc' }, { id: 'asc' }],
+            take: 1, // one return per assignment; the newest if a legacy row ever says otherwise
+            select: { returnNotes: true, comparisonFields: { where: { isDiscrepancy: true }, select: { id: true } } },
+          },
+          photos: { where: ofThisAsset, select: { assetId: true } },
+        },
+      },
+    },
+  });
+  if (!items.length) return [];
+
+  // What is still owed / was settled later, for all the returned assignments at once.
+  const owed = await getUnreturned(items.filter((i) => i.assignment.status === 'RETURNED').map((i) => i.assignment.id));
+
+  const rows = items.map(({ role, conditionAtHandover, returnCondition, assignment: a }) => {
+    const record = a.returnRecords[0] ?? null;
+    const entry = (owed.get(a.id) ?? []).find((e) => e.kind === 'ASSET' && e.assetId === assetId) ?? null;
+    const lateCondition = entry?.status === 'RESOLVED' && entry.resolution?.kind === 'RETURNED' ? entry.resolution.condition : null;
+    const atReturn = [returnCondition, lateCondition].find((c) => CONDITION_RANK.includes(c)) ?? null;
+    return {
+      at: (a.assignedAt ?? a.createdAt).getTime(),
+      createdAt: a.createdAt.getTime(),
+      row: {
+        assignmentId: a.id,
+        assignmentCode: a.assignmentCode,
+        status: a.status,
+        role,
+        employee: a.employee,
+        assignedAt: a.assignedAt,
+        returnedAt: a.returnedAt,
+        conditionAtHandover,
+        returnCondition: atReturn,
+        change: conditionChange(conditionAtHandover, atReturn),
+        returnNotes: record?.returnNotes || null,
+        discrepancyCount: record?.comparisonFields.length ?? 0,
+        unreturnedOpen: entry?.status === 'OPEN',
+        photoCount: a.photos.filter((p) => p.assetId === assetId || role === 'PRIMARY').length,
+      },
+    };
+  });
+  return rows.sort((x, y) => y.at - x.at || y.createdAt - x.createdAt || y.row.assignmentCode.localeCompare(x.row.assignmentCode)).map((r) => r.row);
+}
+
 router.get(
   '/',
   read,
@@ -249,7 +363,7 @@ router.get(
     const where = { AND: and };
     const [total, data] = await Promise.all([
       prisma.asset.count({ where }),
-      prisma.asset.findMany({ where, include: listInclude, orderBy: [{ [f.sort]: f.order }, { id: 'asc' }], ...paginate(f) }),
+      prisma.asset.findMany({ where, include: listInclude, orderBy: orderByFor(f.sort, f.order), ...paginate(f) }),
     ]);
     // Batch field-definition lookups by category so the list can shape each item's customFields.
     const catIds = [...new Set(data.map((a) => a.categoryId))];
@@ -259,6 +373,19 @@ router.get(
       if (defs) defsByCat.set(cid, defs.fields);
     }
     res.json({ data: data.map((a) => shapeCustomFields(a, defsByCat.get(a.categoryId) ?? [])), meta: pageMeta(f, total) });
+  }),
+);
+
+// GET /api/v1/assets/:id/handover-history — Phase 9 P5b, the asset's condition over its handovers. Registered ahead of
+// the `/:id` routes (and of any future `/:id/...` handler that could shadow it).
+router.get(
+  '/:id/handover-history',
+  read,
+  validate({ params: idParams }),
+  asyncHandler(async (req, res) => {
+    const asset = await loadScoped(req, req.params.id); // 404 outside the room scope — the detail's rule
+    const [current, rows] = await Promise.all([loadLastConditionCheck(asset), loadHandoverHistory(asset.id, req.user)]);
+    res.json({ data: { asset: { id: asset.id, code: asset.code, name: asset.name, condition: asset.condition }, current, rows } });
   }),
 );
 

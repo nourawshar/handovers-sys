@@ -9,6 +9,7 @@ const { paginationQuery, paginate, pageMeta } = require('../utils/pagination');
 const { audit } = require('../services/audit.service');
 const { upload, persistImages, removeFile } = require('../services/upload.service');
 const svc = require('../services/assignment.service');
+const { getUnreturned } = require('../services/return.service');
 
 const router = express.Router();
 const read = requireCapability('assignments:read');
@@ -185,6 +186,55 @@ const phoneDetailInclude = {
   },
 };
 
+/**
+ * Phase 9 / P2 — `sort` + `order` on the list. The key is whitelisted (an unknown one is a 400 VALIDATION_ERROR that
+ * names the allowed keys). Default = newest first (assignedAt desc), as before.
+ */
+const SORT_KEYS = ['assignedAt', 'assignmentCode', 'status', 'type', 'employee'];
+const sortQuery = {
+  sort: z.enum(SORT_KEYS, { error: `Unknown sort key. Allowed: ${SORT_KEYS.join(', ')}` }).default('assignedAt'),
+  order: z.enum(['asc', 'desc'], { error: 'Invalid order. Allowed: asc, desc' }).default('desc'),
+};
+
+/** Newest first: the date the assignment was handed over, a DRAFT (no assignedAt yet) after all the others, then creation. */
+const NEWEST_FIRST = [{ assignedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }];
+
+/**
+ * Prisma orderBy for a sort key: the key itself, then newest first inside equal values and ALWAYS `id` last, so rows
+ * with equal values page deterministically. `employee` sorts by the employee's full name through the relation;
+ * `status` and `type` follow the enum's declaration order — the order PostgreSQL gives an enum column. A DRAFT has no
+ * assignedAt: it sorts after the dated rows either way.
+ */
+const orderByFor = (sort, dir) => [
+  ...{
+    assignedAt: [{ assignedAt: { sort: dir, nulls: 'last' } }, { createdAt: dir }],
+    assignmentCode: [{ assignmentCode: dir }],
+    status: [{ status: dir }, ...NEWEST_FIRST],
+    type: [{ type: dir }, ...NEWEST_FIRST],
+    employee: [{ employee: { fullName: dir } }, ...NEWEST_FIRST],
+  }[sort],
+  { id: 'asc' },
+];
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 24 * 3600 * 1000;
+const dateFilter = z.string().trim().refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid date');
+
+/** `assignedAt` range of the `assignedFrom` / `assignedTo` filters. `assignedFrom` is an inclusive lower bound. A
+ *  date-only `assignedTo` ("2026-11-21") parses as 00:00 UTC and would silently drop that whole day, so it means
+ *  "through the end of that day (UTC)" — the audit-logs `to` rule (QA F-17); a full timestamp stays an inclusive bound.
+ *  An assignment without assignedAt (a DRAFT) is in no range. */
+function assignedAtRange({ assignedFrom, assignedTo }) {
+  const range = {};
+  if (assignedFrom) range.gte = new Date(assignedFrom);
+  if (assignedTo) {
+    const d = new Date(assignedTo);
+    if (DATE_ONLY.test(assignedTo)) range.lt = new Date(d.getTime() + DAY_MS);
+    else range.lte = d;
+  }
+  return Object.keys(range).length ? { assignedAt: range } : null;
+}
+
 const listQuery = z.object({
   ...paginationQuery,
   type: assignmentType.optional(),
@@ -193,7 +243,40 @@ const listQuery = z.object({
   workIdentityId: z.uuid().optional(),
   roomId: z.uuid().optional(),
   q: z.string().trim().max(100).optional(),
+  /** Handed over on or after this date / through the end of this date (YYYY-MM-DD, or a full ISO timestamp). */
+  assignedFrom: dateFilter.optional(),
+  assignedTo: dateFilter.optional(),
+  ...sortQuery,
 });
+
+/** What the list needs of an assignment's return (Phase 9 P5a): its latest ReturnRecord — when it was made and whether
+ *  one of its comparison fields is a discrepancy (one is enough, so at most one is read per record). A nested read, so
+ *  it is batched for the whole page by Prisma — one query, not one per row. */
+const returnSummarySelect = {
+  orderBy: [{ returnedAt: 'desc' }, { id: 'asc' }],
+  take: 1, // one return per assignment; the newest if a legacy row ever says otherwise
+  select: { returnedAt: true, comparisonFields: { where: { isDiscrepancy: true }, select: { id: true }, take: 1 } },
+};
+
+/**
+ * The list rows with `returnRecord: { returnedAt, hasDiscrepancies, unreturnedOpen } | null` (Phase 9 P5a) in place of
+ * the raw `returnRecords` that returnSummarySelect read: null for an assignment that was never returned; otherwise when
+ * its latest return was made, whether that return shows a discrepancy, and how many of the items that did not come
+ * back are still OPEN — getUnreturned(), THE derivation, asked once for all the returned rows of the page.
+ */
+async function withReturnRecord(rows) {
+  const owed = await getUnreturned(rows.filter((r) => r.returnRecords.length).map((r) => r.id));
+  return rows.map(({ returnRecords: [record], ...row }) => ({
+    ...row,
+    returnRecord: record
+      ? {
+          returnedAt: record.returnedAt,
+          hasDiscrepancies: record.comparisonFields.length > 0,
+          unreturnedOpen: (owed.get(row.id) ?? []).filter((e) => e.status === 'OPEN').length,
+        }
+      : null,
+  }));
+}
 
 // GET /api/v1/assignments — list/filter (paginated, contract §7.1)
 router.get(
@@ -209,6 +292,8 @@ router.get(
     if (f.employeeId) and.push({ employeeId: f.employeeId });
     if (f.workIdentityId) and.push({ workIdentityId: f.workIdentityId });
     if (f.roomId) and.push(svc.assignmentRoomWhere({ id: f.roomId })); // same seat-else-employee rule as the scope
+    const assignedAt = assignedAtRange(f);
+    if (assignedAt) and.push(assignedAt);
     if (f.q)
       and.push({
         OR: [
@@ -227,7 +312,7 @@ router.get(
       prisma.assignment.count({ where }),
       prisma.assignment.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: orderByFor(f.sort, f.order),
         select: {
           id: true, assignmentCode: true, type: true, status: true,
           employeeId: true, workIdentityId: true, assetId: true,
@@ -235,11 +320,12 @@ router.get(
           employee: { select: { id: true, fullName: true } },
           workIdentity: { select: { id: true, name: true } },
           asset: { select: { id: true, code: true, name: true, phoneDetail: { select: { make: true, model: true } } } },
+          returnRecords: returnSummarySelect,
         },
         ...paginate(f),
       }),
     ]);
-    res.json({ data: rows, meta: pageMeta(f, total) });
+    res.json({ data: await withReturnRecord(rows), meta: pageMeta(f, total) });
   }),
 );
 
