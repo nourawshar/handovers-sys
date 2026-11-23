@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Eye, EyeOff, Pencil, Plus, Search, ShieldAlert, Trash2, X } from 'lucide-react'
 import { decryptAccount, useAccounts, useDeleteAccount, useSaveAccount } from '@/api/hooks'
 import type { Account, AccountSavePayload } from '@/api/types'
@@ -6,12 +7,18 @@ import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
 import { isAdmin } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
+import { SortTh, sortParams, useSort } from '@/components/SortHeader'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, Select, Spinner, StatusBadge, TableWrap, Textarea } from '@/components/ui'
 
 const REVEAL_MS = 30_000
 
-const ACCOUNT_KINDS = ['GMAIL', 'WHATSAPP', 'BITRIX', 'OTHER'] as const
-type AccountKind = (typeof ACCOUNT_KINDS)[number]
+/** Kinds a user may create. WHATSAPP accounts are created automatically from the SIM number. */
+const ACCOUNT_KINDS = ['GMAIL', 'BITRIX', 'OTHER'] as const
+type AccountKind = (typeof ACCOUNT_KINDS)[number] | 'WHATSAPP'
+
+const KIND_LABELS: Record<string, string> = { GMAIL: 'Email / Gmail', BITRIX: 'Bitrix', OTHER: 'Other', WHATSAPP: 'WhatsApp (auto)' }
+const kindLabel = (k: string) => KIND_LABELS[k] ?? k
+const WA_AUTO_HINT = 'Created automatically from the SIM number — nothing to enter'
 
 /** Kinds that require a password on create (server enforces, contract §6.2). */
 const PASSWORD_REQUIRED_KINDS: ReadonlySet<string> = new Set(['GMAIL', 'WHATSAPP', 'BITRIX'])
@@ -46,7 +53,7 @@ function PasswordCell({ account, canDecrypt }: { account: Account; canDecrypt: b
 }
 
 /** Create/edit modal (New account / Edit). Writes Admin-only in the caller. */
-function AccountFormModal({ account, onClose }: { account: Account | null; onClose: () => void }) {
+function AccountFormModal({ account, onClose, onCreated }: { account: Account | null; onClose: () => void; onCreated?: () => void }) {
   const isEdit = !!account
   const save = useSaveAccount(account?.id)
   const [kind, setKind] = useState<AccountKind>((account?.kind as AccountKind) ?? 'GMAIL')
@@ -54,28 +61,27 @@ function AccountFormModal({ account, onClose }: { account: Account | null; onClo
   const [identifier, setIdentifier] = useState(account?.identifier ?? '')
   const [email, setEmail] = useState(account?.email ?? '')
   const [password, setPassword] = useState('')
-  const [isWhatsAppBackup, setIsWhatsAppBackup] = useState(account?.isWhatsAppBackup ?? false)
   const [isActive, setIsActive] = useState(account?.isActive ?? true)
   const [notes, setNotes] = useState(account?.notes ?? '')
   const [err, setErr] = useState<string | null>(null)
 
+  const isWhatsApp = kind === 'WHATSAPP' // only reachable when editing an old auto-created account
   const passwordRequired = !isEdit && PASSWORD_REQUIRED_KINDS.has(kind)
 
   const submit = () => {
     setErr(null)
     const payload: AccountSavePayload = {
-      kind,
+      kind, // an existing WHATSAPP account keeps its kind
       subcategory: subcategory.trim() || null,
       identifier: identifier.trim(),
       email: email.trim() || null,
-      isWhatsAppBackup,
       notes: notes.trim() || null,
       ...(password ? { password } : {}),
       ...(isEdit ? { isActive } : {}),
     }
     save.mutate(payload, {
       onError: (e) => setErr((e as Error).message),
-      onSuccess: onClose,
+      onSuccess: () => { if (!isEdit) onCreated?.(); onClose() },
     })
   }
 
@@ -89,16 +95,18 @@ function AccountFormModal({ account, onClose }: { account: Account | null; onClo
         <div className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Kind" required>
-              <Select value={kind} onChange={(e) => setKind(e.target.value as AccountKind)} aria-label="Kind">
-                {ACCOUNT_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+              <Select value={kind} onChange={(e) => setKind(e.target.value as AccountKind)} aria-label="Kind" disabled={isWhatsApp}>
+                {isWhatsApp && <option value="WHATSAPP">{kindLabel('WHATSAPP')}</option>}
+                {ACCOUNT_KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
               </Select>
             </Field>
             <Field label="Subcategory">
-              <Input value={subcategory} onChange={(e) => setSubcategory(e.target.value)} placeholder="e.g. GMail-for-WhatsApp-Backup" />
+              <Input value={subcategory} onChange={(e) => setSubcategory(e.target.value)} placeholder="Optional" />
             </Field>
           </div>
-          <Field label="Identifier" required hint="The number or email that identifies this account.">
-            <Input value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="e.g. +90 5xx xxx xx xx" autoFocus />
+          {isWhatsApp && <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">{WA_AUTO_HINT}</p>}
+          <Field label="Identifier" required hint={isWhatsApp ? 'The SIM number.' : 'The email or name that identifies this account.'}>
+            <Input value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder={isWhatsApp ? '+90 5xx xxx xx xx' : 'e.g. frontdesk@clinic.com'} autoFocus />
           </Field>
           <Field label="Email">
             <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="account@example.com" />
@@ -110,10 +118,6 @@ function AccountFormModal({ account, onClose }: { account: Account | null; onClo
           >
             <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={isEdit ? 'Leave blank to keep' : '••••••••'} />
           </Field>
-          <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
-            <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600" checked={isWhatsAppBackup} onChange={(e) => setIsWhatsAppBackup(e.target.checked)} />
-            WhatsApp backup account
-          </label>
           {isEdit && (
             <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
               <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
@@ -173,18 +177,26 @@ export default function AccountsPage() {
   const user = useAuthStore((s) => s.user)
   const [q, setQ] = useState('')
   const [kind, setKind] = useState('')
-  const [page, setPage] = useState(1)
+  const [active, setActive] = useState('')
+  const [sp, setSp] = useSearchParams()
+  const page = Math.max(1, Number(sp.get('page')) || 1)
+  const setPage = (p: number) => setSp((prev) => { const n = new URLSearchParams(prev); if (p > 1) n.set('page', String(p)); else n.delete('page'); return n }, { replace: true })
+  const { sort, order, toggle } = useSort('createdAt', 'desc')
   const dq = useDebounce(q)
-  useEffect(() => setPage(1), [dq, kind])
-  const list = useAccounts({ q: dq || undefined, kind: kind || undefined, page, pageSize: 25 })
+  const firstRun = useRef(true)
+  useEffect(() => { if (firstRun.current) { firstRun.current = false; return } setPage(1) }, [dq]) // eslint-disable-line react-hooks/exhaustive-deps
+  const list = useAccounts({ q: dq || undefined, kind: kind || undefined, isActive: active === '' ? undefined : active === 'yes', ...sortParams(sort, order), page, pageSize: 25 })
+  /** After creating, show the new row: newest first, page 1. */
+  const showNewest = () => setSp((prev) => { const n = new URLSearchParams(prev); n.delete('sort'); n.delete('order'); n.delete('page'); return n }, { replace: true })
   const admin = isAdmin(user)
   const [form, setForm] = useState<Account | 'new' | null>(null)
+  const th = { sort, order, onSort: toggle }
 
   return (
     <>
       <PageHeader
         title="Accounts"
-        subtitle="Gmail, WhatsApp and Bitrix accounts. Credentials are encrypted at rest and masked here."
+        subtitle="Email, Bitrix and other accounts (WhatsApp accounts are created automatically from SIM numbers). Credentials are encrypted at rest and masked here."
         actions={admin && <Button onClick={() => setForm('new')}><Plus className="h-4 w-4" /> New account</Button>}
       />
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
@@ -196,14 +208,17 @@ export default function AccountsPage() {
           Creating, editing and deleting accounts are Admin-only actions. Managers can view accounts read-only.
         </p>
       )}
-      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
-        <div className="relative sm:col-span-2">
+      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="relative lg:col-span-2">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search identifier or email…" className="pl-9" aria-label="Search accounts" />
         </div>
-        <Select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind">
+        <Select value={kind} onChange={(e) => { setKind(e.target.value); setPage(1) }} aria-label="Kind filter">
           <option value="">All kinds</option>
-          <option value="GMAIL">Gmail</option><option value="WHATSAPP">WhatsApp</option><option value="BITRIX">Bitrix</option><option value="OTHER">Other</option>
+          {(['GMAIL', 'BITRIX', 'OTHER', 'WHATSAPP'] as const).map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
+        </Select>
+        <Select value={active} onChange={(e) => { setActive(e.target.value); setPage(1) }} aria-label="Active filter">
+          <option value="">Active: any</option><option value="yes">Active: yes</option><option value="no">Active: no</option>
         </Select>
       </div>
       <div className="card overflow-hidden">
@@ -211,17 +226,27 @@ export default function AccountsPage() {
           <>
             <TableWrap>
               <thead className="bg-slate-50"><tr>
-                <th className="th">Kind</th><th className="th">Identifier</th><th className="th">Email</th><th className="th">Password</th><th className="th">Backup</th><th className="th">Status</th>{admin && <th className="th">Actions</th>}
+                <SortTh label="Kind" sortKey="kind" {...th} />
+                <SortTh label="Identifier" sortKey="identifier" {...th} />
+                <SortTh label="Email" sortKey="email" {...th} />
+                <th className="th">Password</th>
+                <SortTh label="Active" sortKey="isActive" {...th} />
+                <SortTh label="Created" sortKey="createdAt" {...th} />
+                {admin && <th className="th">Actions</th>}
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {list.data.items.map((a) => (
                   <tr key={a.id} className="hover:bg-slate-50">
-                    <td className="td"><Badge tone="blue">{a.kind}</Badge>{a.subcategory && <div className="mt-0.5 text-xs text-slate-400">{a.subcategory}</div>}</td>
+                    <td className="td">
+                      <Badge tone={a.kind === 'WHATSAPP' ? 'green' : 'blue'}>{kindLabel(a.kind)}</Badge>
+                      {a.kind === 'WHATSAPP' && <div className="mt-0.5 text-xs text-slate-400">{WA_AUTO_HINT}</div>}
+                      {a.subcategory && <div className="mt-0.5 text-xs text-slate-400">{a.subcategory}</div>}
+                    </td>
                     <td className="td font-medium">{a.identifier}</td>
                     <td className="td">{a.email ?? '—'}</td>
                     <td className="td"><PasswordCell account={a} canDecrypt={admin} /></td>
-                    <td className="td">{a.isWhatsAppBackup ? <Badge tone="green">WhatsApp backup</Badge> : '—'}</td>
                     <td className="td"><StatusBadge value={a.isActive ? 'ACTIVE' : 'LEFT'} /></td>
+                    <td className="td whitespace-nowrap text-xs text-slate-600">{a.createdAt ? new Date(a.createdAt).toLocaleString() : '—'}</td>
                     {admin && (
                       <td className="td">
                         <div className="flex items-start gap-2">
@@ -238,7 +263,7 @@ export default function AccountsPage() {
           </>
         )}
       </div>
-      {form && <AccountFormModal account={form === 'new' ? null : form} onClose={() => setForm(null)} />}
+      {form && <AccountFormModal account={form === 'new' ? null : form} onClose={() => setForm(null)} onCreated={showNewest} />}
     </>
   )
 }

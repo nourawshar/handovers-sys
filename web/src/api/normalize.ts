@@ -180,6 +180,7 @@ export function normAccount(a: R): Account {
     isActive: a.isActive !== false,
     currentAssignmentId: a.currentAssignmentId ?? null,
     notes: str(a.notes),
+    createdAt: str(a.createdAt),
   }
 }
 

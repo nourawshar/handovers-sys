@@ -173,6 +173,7 @@ export interface Account {
   isActive: boolean
   currentAssignmentId: string | null
   notes: string | null
+  createdAt?: string | null
 }
 
 /** Write payload for POST /accounts and PATCH /accounts/:id (FE-10). `password` is required on
