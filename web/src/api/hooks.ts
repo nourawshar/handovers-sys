@@ -222,7 +222,7 @@ export function useAssetTimeline(assetId: string | undefined, page = 1, search =
 }
 
 /* ---------- Accounts ---------- */
-export function useAccounts(filters: { q?: string; kind?: string; identifier?: string; subcategory?: string; isWhatsAppBackup?: boolean; page?: number; pageSize?: number }, enabled = true) {
+export function useAccounts(filters: { q?: string; kind?: string; identifier?: string; subcategory?: string; isWhatsAppBackup?: boolean; isActive?: boolean; page?: number; pageSize?: number }, enabled = true) {
   return useQuery({
     queryKey: ['accounts', filters],
     enabled,

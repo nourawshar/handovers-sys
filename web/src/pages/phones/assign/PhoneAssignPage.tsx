@@ -230,6 +230,9 @@ export function WaFields({ wa, onChange, required, title, backupEmailOptions = [
             placeholder="Type to filter emails…"
             selectPlaceholder="— select backup Gmail —"
           />
+          <p className="mt-1 text-xs text-slate-500">
+            Not in the list? Add the email on the <Link to="/accounts" className="text-brand-700 underline">Accounts page</Link> first.
+          </p>
         </Field>
         <Field label="Backup date" required={required}>
           <Input type="date" value={wa.backupDate} onChange={(e) => set({ backupDate: e.target.value })} />
@@ -419,7 +422,7 @@ export default function PhoneAssignPage() {
   // SIM-card assets (single number source) + Gmail backup accounts (dropdowns).
   const simCat = categories.data?.find((c) => !c.parentId && /sim/i.test(c.name))
   const sims = useAssets({ categoryId: simCat?.id, status: 'AVAILABLE', pageSize: 100 }, !!simCat)
-  const gmailBackups = useAccounts({ kind: 'GMAIL', isWhatsAppBackup: true, pageSize: 100 })
+  const gmailBackups = useAccounts({ kind: 'GMAIL', isActive: true, pageSize: 100 })
   const gmailOptions = (gmailBackups.data?.items ?? []).map((a) => ({
     value: a.email || a.identifier,
     label: a.email || a.identifier,

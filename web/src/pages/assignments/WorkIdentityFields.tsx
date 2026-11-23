@@ -52,13 +52,6 @@ export function WorkIdentityFields({ value, onChange, errors, className }: {
 
   return (
     <div className={`grid gap-4 sm:grid-cols-2 ${className ?? ''}`}>
-      {isCallCenter ? (
-        <Field label="Work identity name" hint="e.g. sofia — the seat label" required error={errors.name}>
-          <Input value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="sofia" aria-label="Work identity name" />
-        </Field>
-      ) : (
-        <p className="text-sm text-slate-500">No work identity — the employee's real name is used.</p>
-      )}
       <Field label="Department" required error={errors.departmentTeamId}>
         <SearchableSelect
           options={[
@@ -71,6 +64,13 @@ export function WorkIdentityFields({ value, onChange, errors, className }: {
           selectPlaceholder="— select department —"
         />
       </Field>
+      {isCallCenter ? (
+        <Field label="Work identity name" hint="e.g. sofia — the seat label" required error={errors.name}>
+          <Input value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="sofia" aria-label="Work identity name" />
+        </Field>
+      ) : (
+        <p className="text-sm text-slate-500">No work identity — the employee's real name is used.</p>
+      )}
       {isCallCenter && (
         <Field label="Room" hint="Call-center seats require a room" required error={errors.roomId}>
           <SearchableSelect
