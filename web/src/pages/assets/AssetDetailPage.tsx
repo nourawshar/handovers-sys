@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Camera, Pencil, Search, Trash2 } from 'lucide-react'
-import { useAsset, useAssetTimeline, useCategories, useDeleteAsset, useUploadAssetPhotos } from '@/api/hooks'
+import { useAsset, useAssetHandoverHistory, useAssetTimeline, useCategories, useDeleteAsset, useUploadAssetPhotos } from '@/api/hooks'
 import type { DeleteAssetResult } from '@/api/hooks'
 import AssignmentDrawer from './AssignmentDrawer'
-import type { Asset, LastConditionCheck, PhotoHistoryEntry, TimelineEntry } from '@/api/types'
+import type { Asset, HandoverChange, HandoverHistoryRow, LastConditionCheck, PhotoHistoryEntry, TimelineEntry } from '@/api/types'
 import { useAuthStore } from '@/store/auth'
 import { can } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
@@ -219,6 +219,95 @@ function TimelineItem({ e, onOpenAssignment }: { e: TimelineEntry; onOpenAssignm
   )
 }
 
+const CHANGE_STYLE: Record<HandoverChange, { icon: string; cls: string; label: string }> = {
+  worse: { icon: '▼', cls: 'text-red-600', label: 'worse' },
+  better: { icon: '▲', cls: 'text-emerald-600', label: 'better' },
+  same: { icon: '=', cls: 'text-slate-500', label: 'unchanged' },
+  unknown: { icon: '—', cls: 'text-slate-400', label: 'unknown' },
+}
+
+function ReturnCondition({ row }: { row: HandoverHistoryRow }) {
+  const st = CHANGE_STYLE[row.change]
+  if (!row.returnCondition) return <span className="text-slate-400" aria-label="not recorded">—</span>
+  return (
+    <span className={`inline-flex items-center gap-1 font-medium ${st.cls}`}>
+      <span aria-hidden="true">{st.icon}</span>
+      {titleCase(row.returnCondition)}
+      <span className="sr-only">({st.label})</span>
+    </span>
+  )
+}
+
+/** Third tab: condition at each handover/return of this asset (Phase 9 P5b). */
+export function ConditionHistory({ assetId }: { assetId: string }) {
+  const nav = useNavigate()
+  const q = useAssetHandoverHistory(assetId)
+  if (q.isLoading) return <div className="card p-5"><Spinner /></div>
+  if (q.isError || !q.data) return <div className="card p-5"><ErrorState error={q.error} onRetry={() => q.refetch()} /></div>
+  const { current, rows } = q.data
+  const open = (id: string) => nav(`/assignments/${id}`)
+  return (
+    <div className="card p-5">
+      {current && (
+        <p className="mb-4 text-sm text-slate-600">
+          Now: <b className="text-slate-900">{titleCase(current.condition)}</b> — last recorded {SOURCE_TEXT[current.source] ?? current.source}
+          {current.assignmentCode ? ` ${current.assignmentCode}` : ''}{current.at ? ` on ${fmtDate(current.at)}` : ''}
+        </p>
+      )}
+      {rows.length === 0 ? (
+        <EmptyState title="This asset has never been handed over" />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs uppercase tracking-wide text-slate-500">
+              <tr className="border-b border-slate-200">
+                <th className="px-2 py-2 font-medium">Assignment</th>
+                <th className="px-2 py-2 font-medium">Employee</th>
+                <th className="px-2 py-2 font-medium">Assigned → returned</th>
+                <th className="px-2 py-2 font-medium">Role</th>
+                <th className="px-2 py-2 font-medium">At handover</th>
+                <th className="px-2 py-2 font-medium">At return</th>
+                <th className="px-2 py-2 font-medium">Return notes</th>
+                <th className="px-2 py-2 font-medium">Flags</th>
+                <th className="px-2 py-2 text-right font-medium">Photos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr
+                  key={r.assignmentId}
+                  tabIndex={0}
+                  onClick={() => open(r.assignmentId)}
+                  onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(r.assignmentId) } }}
+                  className={`cursor-pointer border-b border-slate-100 align-top focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${r.change === 'worse' ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-slate-50'}`}
+                >
+                  <td className="px-2 py-2.5">
+                    <Link to={`/assignments/${r.assignmentId}`} onClick={(e) => e.stopPropagation()} className="font-mono font-semibold text-brand-700 hover:underline">{r.assignmentCode}</Link>
+                  </td>
+                  <td className="px-2 py-2.5 text-slate-900">{r.employee?.fullName || '—'}</td>
+                  <td className="whitespace-nowrap px-2 py-2.5 text-slate-700">{fmtDate(r.assignedAt)} → {r.returnedAt ? fmtDate(r.returnedAt) : 'still with employee'}</td>
+                  <td className="px-2 py-2.5">{r.role ? <Badge>{titleCase(r.role)}</Badge> : '—'}</td>
+                  <td className="px-2 py-2.5">{r.conditionAtHandover ? <ConditionBadge value={r.conditionAtHandover} /> : '—'}</td>
+                  <td className="px-2 py-2.5"><ReturnCondition row={r} /></td>
+                  <td className="max-w-[16rem] break-words px-2 py-2.5 text-slate-600">{r.returnNotes || '—'}</td>
+                  <td className="px-2 py-2.5">
+                    <div className="flex flex-wrap gap-1">
+                      {r.discrepancyCount > 0 && <Badge tone="red">{r.discrepancyCount} discrepanc{r.discrepancyCount === 1 ? 'y' : 'ies'}</Badge>}
+                      {r.unreturnedOpen && <Badge tone="amber">Not returned</Badge>}
+                      {r.discrepancyCount === 0 && !r.unreturnedOpen && <span className="text-slate-400">—</span>}
+                    </div>
+                  </td>
+                  <td className="px-2 py-2.5 text-right text-slate-700">{r.photoCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly?: boolean }) {
   const { id } = useParams()
   const nav = useNavigate()
@@ -226,7 +315,8 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
   const user = useAuthStore((s) => s.user)
   const { data, isLoading, isError, error, refetch } = useAsset(id)
   const categories = useCategories()
-  const [tab, setTab] = useState<'details' | 'timeline'>(timelineOnly ? 'timeline' : 'details')
+  const [baseTab, setTab] = useState<'details' | 'timeline'>(timelineOnly ? 'timeline' : 'details')
+  const tab: 'details' | 'timeline' | 'conditions' = searchParams.get('tab') === 'conditions' && !timelineOnly ? 'conditions' : baseTab
   const deleteAsset = useDeleteAsset(id ?? '')
   const [deleteMsg, setDeleteMsg] = useState<{ kind: 'ok' | 'warn'; text: string } | null>(null)
 
@@ -298,12 +388,16 @@ export default function AssetDetailPage({ timelineOnly = false }: { timelineOnly
       </div>
 
       <Tabs
-        tabs={[{ id: 'details', label: 'Details' }, { id: 'timeline', label: 'Timeline' }]}
+        tabs={[{ id: 'details', label: 'Details' }, { id: 'timeline', label: 'Timeline' }, { id: 'conditions', label: 'Condition over handovers' }]}
         value={tab}
-        onChange={(t) => { setTab(t); nav(t === 'timeline' ? `/assets/${a.id}/timeline` : `/assets/${a.id}`, { replace: true }) }}
+        onChange={(t) => {
+          if (t === 'conditions') { nav(`/assets/${a.id}?tab=conditions`, { replace: true }); return }
+          setTab(t)
+          nav(t === 'timeline' ? `/assets/${a.id}/timeline` : `/assets/${a.id}`, { replace: true })
+        }}
       />
 
-      {tab === 'timeline' ? <TimelineList assetId={a.id} embedded={data.timeline} onOpenAssignment={openDrawer} /> : (
+      {tab === 'conditions' ? <ConditionHistory assetId={a.id} /> : tab === 'timeline' ? <TimelineList assetId={a.id} embedded={data.timeline} onOpenAssignment={openDrawer} /> : (
         <div className="grid gap-6 lg:grid-cols-5">
           <div className="space-y-6 lg:col-span-3">
             <div className="card p-5">

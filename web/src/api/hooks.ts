@@ -3,7 +3,7 @@ import { api } from './client'
 import {
   normAccount, normAsset, normAssignment, normAssignmentDetail, normAuditLog, normCategories, normDepartment, normEmployee, normEmployeeHistory, normField, normList,
   normPhoto, normReportRows, normReturnForm, normReturnResult, normRoom, normTimeline, normUser,
-  normWorkIdentity, unwrap,
+  normWorkIdentity, unwrap, normHandoverHistory,
 } from './normalize'
 import type {
   Account, AccountSavePayload, Asset, AssignmentDetail, AuditLogEntry, Category, CategoryField, CategoryFieldSavePayload, CategorySavePayload, Department, DepartmentSavePayload, Employee, EmployeeHistoryEntry, ExportFormat, GenericAssignmentPayload, ListResult, PhoneAssignmentPayload, Photo, ReportFilters,
@@ -104,6 +104,8 @@ export interface AssetFilters {
   status?: string
   holderId?: string
   roomId?: string
+  sort?: string
+  order?: 'asc' | 'desc'
   page?: number
   pageSize?: number
 }
@@ -275,7 +277,7 @@ export function useDeleteAccount(id: string) {
 }
 
 /* ---------- People & places ---------- */
-export function useEmployees(filters: { q?: string; roomId?: string; departmentTeamId?: string; page?: number; pageSize?: number; sort?: 'name' | 'lastAdded' }) {
+export function useEmployees(filters: { q?: string; roomId?: string; departmentTeamId?: string; page?: number; pageSize?: number; sort?: string; order?: 'asc' | 'desc' }) {
   return useQuery({
     queryKey: ['employees', filters],
     placeholderData: keepPreviousData,
@@ -449,7 +451,7 @@ export function useWorkIdentities(filters: { q?: string; roomId?: string } = {})
 }
 
 /** Phase 2 endpoint — not implemented on the server yet; callers handle the 404. */
-export function useAssignments(filters: { status?: string; type?: string; q?: string; page?: number; pageSize?: number } = {}) {
+export function useAssignments(filters: { status?: string; type?: string; q?: string; employeeId?: string; assignedFrom?: string; assignedTo?: string; sort?: string; order?: string; page?: number; pageSize?: number } = {}) {
   return useQuery({
     queryKey: ['assignments', filters],
     placeholderData: keepPreviousData,
@@ -572,7 +574,7 @@ export function useSubmitPhoneReturn(assignmentId: string) {
 
 /* ---------- Users (BE-17 CRUD: POST/PATCH /users, PATCH /users/:id/password) ---------- */
 
-export function useUsers(filters: { q?: string; role?: string; isActive?: boolean; page?: number; pageSize?: number } = {}) {
+export function useUsers(filters: { q?: string; role?: string; isActive?: boolean; sort?: string; order?: 'asc' | 'desc'; page?: number; pageSize?: number } = {}) {
   return useQuery({
     queryKey: ['users', filters],
     placeholderData: keepPreviousData,
@@ -627,6 +629,8 @@ export interface AuditLogFilters {
   from?: string
   to?: string
   q?: string
+  sort?: string
+  order?: 'asc' | 'desc'
   page?: number
   pageSize?: number
 }
@@ -679,6 +683,44 @@ export function useExportReport() {
         URL.revokeObjectURL(url)
       }
       return fallback
+    },
+  })
+}
+
+/* ---------- Phase 9: asset condition over handovers ---------- */
+export function useAssetHandoverHistory(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['asset-handover-history', id],
+    enabled: !!id && enabled,
+    queryFn: async () => normHandoverHistory(await api.get(`/assets/${id}/handover-history`)),
+  })
+}
+
+/* ---------- Phase 9: return record + unreturned items ---------- */
+import { normReturnRecord } from './normalize'
+import type { ResolveUnreturnedPayload } from './types'
+
+export function useReturnRecord(id?: string) {
+  return useQuery({
+    queryKey: ['return-record', id],
+    enabled: !!id,
+    retry: false,
+    queryFn: async () => normReturnRecord(await api.get(`/assignments/${id}/return-record`)),
+  })
+}
+
+export function useResolveUnreturned(assignmentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (p: ResolveUnreturnedPayload) => api.post(`/assignments/${assignmentId}/unreturned/resolve`, p),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['return-record', assignmentId] })
+      qc.invalidateQueries({ queryKey: ['assignment', assignmentId] })
+      qc.invalidateQueries({ queryKey: ['assignment-timeline', assignmentId] })
+      qc.invalidateQueries({ queryKey: ['assignments'] })
+      qc.invalidateQueries({ queryKey: ['assets'] })
+      qc.invalidateQueries({ queryKey: ['asset'] })
+      qc.invalidateQueries({ queryKey: ['asset-handover-history'] })
     },
   })
 }

@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { useAssets, useDeleteEmployee, useDepartments, useEmployees, useRooms, useSaveEmployee } from '@/api/hooks'
 import type { DeleteEmployeeResult, EmployeeSavePayload } from '@/api/hooks'
 import type { Employee } from '@/api/types'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import { SortTh, sortParams, useSort } from '@/components/SortHeader'
+import { fmtDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import { isAdmin } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
@@ -159,20 +161,27 @@ export default function EmployeesPage() {
   const rooms = useRooms()
   const depts = useDepartments()
   const [q, setQ] = useState('')
-  const [roomId, setRoomId] = useState('')
-  const [departmentTeamId, setDept] = useState('')
-  const [page, setPage] = useState(1)
-  const [sort, setSort] = useState<'name' | 'lastAdded'>('name')
+  const [roomId, setRoomIdRaw] = useState('')
+  const [departmentTeamId, setDeptRaw] = useState('')
+  const [sp, setSp] = useSearchParams()
+  const page = Number(sp.get('page') ?? 1) || 1
+  const setPage = (p: number) => setSp((prev) => { const n = new URLSearchParams(prev); if (p > 1) n.set('page', String(p)); else n.delete('page'); return n }, { replace: true })
+  const { sort, order, toggle } = useSort('fullName', 'asc')
   const [open, setOpen] = useState<Set<string>>(new Set())
   const [openAsset, setOpenAsset] = useState<string | null>(null)
   const [form, setForm] = useState<{ open: boolean; editing: Employee | null }>({ open: false, editing: null })
   const [deleteResult, setDeleteResult] = useState<{ kind: 'info' | 'warn'; text: string } | null>(null)
   const dq = useDebounce(q)
-  useEffect(() => setPage(1), [dq, roomId, departmentTeamId, sort])
+  // Page returns to 1 whenever a filter changes (sort changes are handled by useSort).
+  const resetPage = () => setPage(1)
+  const setRoomId = (v: string) => { setRoomIdRaw(v); resetPage() }
+  const setDept = (v: string) => { setDeptRaw(v); resetPage() }
+  const firstQ = useRef(true)
+  useEffect(() => { if (firstQ.current) { firstQ.current = false; return } resetPage() }, [dq]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Team leaders are scoped server-side (their room only); we hide the room filter for them.
   const leader = user?.role === 'TEAM_LEADER'
-  const list = useEmployees({ q: dq || undefined, roomId: (!leader && roomId) || undefined, departmentTeamId: departmentTeamId || undefined, page, pageSize: 25, sort })
+  const list = useEmployees({ q: dq || undefined, roomId: (!leader && roomId) || undefined, departmentTeamId: departmentTeamId || undefined, page, pageSize: 25, ...sortParams(sort, order) })
 
   return (
     <>
@@ -197,15 +206,6 @@ export default function EmployeesPage() {
         )}
         <SearchableSelect ariaLabel="Team" options={(depts.data ?? []).map((d) => ({ value: d.id, label: d.name }))} value={departmentTeamId} onChange={setDept} placeholder="Type to filter teams…" selectPlaceholder="All teams" />
       </div>
-      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-slate-600">Sort</span>
-          <Select value={sort} onChange={(e) => setSort(e.target.value as 'name' | 'lastAdded')} aria-label="Sort employees">
-            <option value="name">Name (A–Z)</option>
-            <option value="lastAdded">Last added</option>
-          </Select>
-        </div>
-      </div>
       <div className="card overflow-hidden">
         {list.isLoading ? <Spinner /> : list.isError ? <div className="p-4"><ErrorState error={list.error} onRetry={() => list.refetch()} /></div> : !list.data?.items.length ? (
           <EmptyState title="No employees found" action={admin ? <Button variant="secondary" size="sm" onClick={() => setForm({ open: true, editing: null })}><Plus className="h-4 w-4" />New employee</Button> : undefined} />
@@ -213,7 +213,12 @@ export default function EmployeesPage() {
           <>
             <TableWrap>
               <thead className="bg-slate-50"><tr>
-                <th className="th">Name</th><th className="th">Team</th><th className="th">Room</th><th className="th">Contact</th><th className="th">Status</th><th className="th">Devices</th>
+                <SortTh label="Name" sortKey="fullName" sort={sort} order={order} onSort={toggle} />
+                <SortTh label="Team" sortKey="department" sort={sort} order={order} onSort={toggle} />
+                <SortTh label="Room" sortKey="room" sort={sort} order={order} onSort={toggle} />
+                <th className="th">Contact</th><th className="th">Status</th>
+                <SortTh label="Created" sortKey="createdAt" sort={sort} order={order} onSort={toggle} />
+                <th className="th">Devices</th>
                 {admin && <th className="th">Actions</th>}
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
@@ -226,6 +231,7 @@ export default function EmployeesPage() {
                     <td className="td">{e.room?.code ?? '—'}</td>
                     <td className="td text-xs">{e.internalEmail ?? e.phoneContact ?? '—'}</td>
                     <td className="td"><StatusBadge value={e.status} /></td>
+                    <td className="td whitespace-nowrap text-xs">{e.createdAt ? fmtDate(e.createdAt) : '—'}</td>
                     <td className="td">
                       {open.has(e.id)
                         ? <Devices employeeId={e.id} onOpen={setOpenAsset} />

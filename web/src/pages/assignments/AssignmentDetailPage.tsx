@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, ArrowRightLeft, Printer } from 'lucide-react'
-import { useAssignmentDetail, useAssignmentTimeline } from '@/api/hooks'
+import { ArrowLeft, ArrowRightLeft, FileText, Printer, TriangleAlert } from 'lucide-react'
+import { useAssignmentDetail, useAssignmentTimeline, useReturnRecord } from '@/api/hooks'
 import { AssignmentPhotos, ItemBlocks, PhoneDetailPanel } from '@/components/AssignmentItems'
 import { useAuthStore } from '@/store/auth'
 import { can } from '@/lib/permissions'
@@ -76,6 +76,8 @@ export default function AssignmentDetailPage() {
   const [tlPage, setTlPage] = useState(1)
   const tl = useAssignmentTimeline(id, tlPage)
   const isAdmin = can(user?.role, 'assets.new')
+  const rr = useReturnRecord(data?.status === 'RETURNED' ? id : undefined)
+  const unreturnedOpen = rr.data?.unreturned.filter((u) => u.status === 'OPEN').length ?? 0
 
   if (isLoading) return <Spinner />
   if (isError || !data) return <ErrorState error={error} onRetry={() => refetch()} />
@@ -98,12 +100,21 @@ export default function AssignmentDetailPage() {
           <h1 className="text-xl font-semibold text-slate-900 sm:text-2xl">{a.asset?.name ?? 'Assignment'}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge>{titleCase(a.type)}</Badge><StatusBadge value={a.status} />
+            {a.status === 'RETURNED' && unreturnedOpen > 0 && (
+              <Link to={`/assignments/${a.id}/return-record`}><Badge tone="amber"><TriangleAlert className="mr-1 h-3 w-3" /> {unreturnedOpen} item{unreturnedOpen === 1 ? '' : 's'} not returned</Badge></Link>
+            )}
             {a.employee && <span className="text-sm text-slate-600">{a.employee.fullName}</span>}
             {a.workIdentity && <span className="text-sm text-slate-500">· {a.workIdentity.name}</span>}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link to={`/assignments/${a.id}/receipt`}><Button variant="secondary"><Printer className="h-4 w-4" /> Print receipt</Button></Link>
+          {a.status === 'RETURNED' && (
+            <>
+              <Link to={`/assignments/${a.id}/return-record`}><Button variant="secondary"><FileText className="h-4 w-4" /> View return record</Button></Link>
+              <Link to={`/assignments/${a.id}/return-receipt`}><Button variant="secondary"><Printer className="h-4 w-4" /> Print return receipt</Button></Link>
+            </>
+          )}
           {isAdmin && a.status === 'ACTIVE' && (
             <Link to={`/assignments/${a.id}/return`}><Button><ArrowRightLeft className="h-4 w-4" /> Return device</Button></Link>
           )}

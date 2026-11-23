@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Camera, CheckCircle2, TriangleAlert, X } from 'lucide-react'
+import { ArrowLeft, Camera, CheckCircle2, FileText, Printer, TriangleAlert, X } from 'lucide-react'
 import { useAssignmentDetail, useAssignmentReturnForm, useSubmitPhoneReturn, useUploadReturnPhotos } from '@/api/hooks'
-import type { AssetConditionChange, ComparisonField, Photo, ReturnOutState, SelectOption } from '@/api/types'
+import type { AssetConditionChange, ComparisonField, Photo, ReturnOutState, ReturnSubmitUnreturned, SelectOption } from '@/api/types'
 import { CONDITIONS } from '@/api/types'
 import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, SearchableSelect, Select, Spinner, Textarea } from '@/components/ui'
@@ -243,6 +243,7 @@ interface ReturnResultState {
   oldPhotos: Photo[]
   newPhotos: Photo[]
   assetConditions: AssetConditionChange[]
+  unreturnedItems: ReturnSubmitUnreturned[]
 }
 
 function IdSelect({ value, label, options, onChange }: {
@@ -336,6 +337,7 @@ export default function ReturnPage() {
         hasDiscrepancies: r.hasDiscrepancies,
         assignmentCode: r.assignmentCode,
         assetConditions: r.assetConditions ?? [],
+        unreturnedItems: r.unreturnedItems ?? [],
         oldPhotos: (r.photos?.handover?.length ? r.photos.handover : data?.handoverPhotos) ?? [],
         newPhotos: r.photos?.return?.length
           ? r.photos.return
@@ -361,6 +363,21 @@ export default function ReturnPage() {
             <Badge tone="green"><CheckCircle2 className="mr-1 h-3 w-3" /> No discrepancies</Badge>
           )}
         </div>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Link to={`/assignments/${id}/return-receipt`}><Button type="button"><Printer className="h-4 w-4" /> Print return receipt</Button></Link>
+          <Link to={`/assignments/${id}/return-record`}><Button type="button" variant="secondary"><FileText className="h-4 w-4" /> View return record</Button></Link>
+        </div>
+        {result.unreturnedItems.length > 0 && (
+          <div role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-testid="unreturned-warning">
+            <p className="flex items-center gap-2 font-semibold"><TriangleAlert className="h-4 w-4" /> {result.unreturnedItems.length} item{result.unreturnedItems.length === 1 ? '' : 's'} not returned</p>
+            <ul className="mt-2 list-disc pl-6">
+              {result.unreturnedItems.map((u) => (
+                <li key={`${u.kind}-${u.code}`}><span className="font-mono text-xs font-semibold">{u.code}</span> · {u.name} <span className="text-xs text-amber-700">({titleCase(u.kind)})</span></li>
+              ))}
+            </ul>
+            <p className="mt-2"><Link to={`/assignments/${id}/return-record`} className="font-medium text-amber-900 underline">Open the return record</Link> to mark them returned or lost later.</p>
+          </div>
+        )}
         <div className="space-y-4">
           {result.assetConditions.length > 0 && (
             <div className="card overflow-hidden" data-testid="asset-conditions">

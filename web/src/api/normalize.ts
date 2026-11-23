@@ -5,6 +5,7 @@ import type {
   Account, Asset, AuditLogEntry, BackupStalenessRow, Category, CategoryField, Assignment, AssignmentDetail, ComparisonField, ConditionRow,
   Employee, EmployeeHistoryEntry, ListResult, OutstandingAssignmentRow, PhoneAssignmentDetail, Photo, ReportRow, ReturnForm, ReturnResult, Room,
     RoomCompositionRow, SelectOption, TimelineEntry, User, WhoHasWhatRow, WorkIdentity, Department,
+    HandoverChange, HandoverHistory,
     } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -57,6 +58,7 @@ export function normUser(raw: R): User {
     room: x.room ?? null,
     isActive: x.isActive,
     lastLoginAt: x.lastLoginAt,
+    createdAt: x.createdAt,
   }
 }
 
@@ -211,6 +213,7 @@ export function normEmployee(x: R): Employee {
     internalEmail: str(x.internalEmail),
     status: x.status ?? 'ACTIVE',
     notes: str(x.notes),
+    createdAt: x.createdAt,
   }
 }
 
@@ -276,6 +279,10 @@ export const normAssignment = (a: R): Assignment => {
     asset,
     assignedAt: a.assignedAt, expectedReturnAt: a.expectedReturnAt, returnedAt: a.returnedAt,
     itemCount: typeof a._count?.items === 'number' ? a._count.items : typeof a.itemCount === 'number' ? a.itemCount : null,
+    returnRecord: a.returnRecord ? {
+      returnedAt: str(a.returnRecord.returnedAt), hasDiscrepancies: !!a.returnRecord.hasDiscrepancies,
+      unreturnedOpen: Number(a.returnRecord.unreturnedOpen ?? 0),
+    } : null,
   }
 }
 
@@ -392,6 +399,7 @@ export function normReturnResult(raw: unknown): ReturnResult {
       handover: Array.isArray(ps?.handover) ? ps!.handover.map(mapPhoto) : [],
       return: Array.isArray(ps?.return) ? ps!.return.map(mapPhoto) : [],
     },
+    unreturnedItems: Array.isArray(x.unreturnedItems) ? x.unreturnedItems.map((u: R) => ({ kind: String(u.kind ?? ''), code: u.code ?? '', name: u.name ?? '' })) : [],
     assetConditions: Array.isArray(x.assetConditions) ? x.assetConditions.map((c: R) => ({
       assetId: String(c.assetId), code: c.code ?? '', name: c.name ?? '', role: c.role ?? '',
       from: c.from ?? null, to: c.to ?? null, changed: !!c.changed, status: c.status ?? null,
@@ -465,4 +473,65 @@ export const REPORT_ROW_MAPPERS: Record<string, (r: R) => ReportRow> = {
 export function normReportRows<T extends ReportRow>(raw: unknown, slug: string): ListResult<T> {
   const mapper = REPORT_ROW_MAPPERS[slug] ?? ((r: R) => r as unknown as ReportRow)
   return normList<T>(raw, mapper as (x: R) => T)
+}
+
+/** Phase 9: GET /assets/:id/handover-history ({data:{asset,current,rows}}). */
+export function normHandoverHistory(raw: unknown): HandoverHistory {
+  const d = (obj(unwrap(raw)) ?? {}) as R
+  const rows: R[] = Array.isArray(d.rows) ? d.rows : []
+  return {
+    asset: d.asset ?? null,
+    current: d.current ?? null,
+    rows: rows.map((r) => ({
+      assignmentId: String(r.assignmentId),
+      assignmentCode: String(r.assignmentCode ?? ''),
+      status: String(r.status ?? ''),
+      role: String(r.role ?? ''),
+      employee: r.employee ? { id: String(r.employee.id), fullName: String(r.employee.fullName ?? '') } : null,
+      assignedAt: r.assignedAt ?? null,
+      returnedAt: r.returnedAt ?? null,
+      conditionAtHandover: r.conditionAtHandover ?? null,
+      returnCondition: r.returnCondition ?? null,
+      change: (['same', 'worse', 'better'].includes(r.change) ? r.change : 'unknown') as HandoverChange,
+      returnNotes: r.returnNotes ?? null,
+      discrepancyCount: Number(r.discrepancyCount) || 0,
+      unreturnedOpen: !!r.unreturnedOpen,
+      photoCount: Number(r.photoCount) || 0,
+    })),
+  }
+}
+
+/* ---------- Phase 9: return record ---------- */
+import type { ReturnRecord, UnreturnedEntry } from './types'
+
+export const normUnreturned = (u: R): UnreturnedEntry => ({
+  kind: u.kind ?? 'ASSET', assetId: str(u.assetId), accountId: str(u.accountId),
+  code: u.code ?? '', name: u.name ?? '', role: u.role ?? '', status: u.status ?? 'OPEN',
+  resolution: u.resolution ? {
+    kind: u.resolution.kind, at: str(u.resolution.at), by: u.resolution.by ?? null,
+    notes: str(u.resolution.notes), condition: str(u.resolution.condition),
+  } : null,
+})
+
+export function normReturnRecord(raw: unknown): ReturnRecord {
+  const x = obj(obj(raw)?.data ?? raw) ?? {}
+  const ps = obj(x.photos)
+  return {
+    id: String(x.id), assignmentId: String(x.assignmentId), assignmentCode: x.assignmentCode ?? '',
+    returnedAt: str(x.returnedAt), returnedBy: x.returnedBy ?? null,
+    returnCondition: str(x.returnCondition), returnNotes: str(x.returnNotes),
+    employee: x.employee ?? null, workIdentity: x.workIdentity ?? null,
+    items: Array.isArray(x.items) ? x.items.map((i: R) => ({
+      assetId: String(i.assetId), code: i.code ?? '', name: i.name ?? '', role: i.role ?? '',
+      serialNumber: str(i.serialNumber), conditionAtHandover: str(i.conditionAtHandover),
+      returnCondition: str(i.returnCondition), returned: i.returned !== false,
+    })) : [],
+    comparison: Array.isArray(x.comparison) ? x.comparison.map(normComparisonField) : [],
+    hasDiscrepancies: !!x.hasDiscrepancies,
+    unreturned: Array.isArray(x.unreturned) ? x.unreturned.map(normUnreturned) : [],
+    photos: {
+      handover: Array.isArray(ps?.handover) ? ps!.handover.map(mapPhoto) : [],
+      return: Array.isArray(ps?.return) ? ps!.return.map(mapPhoto) : [],
+    },
+  }
 }

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { KeyRound, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { useDeleteUser, useResetUserPassword, useRooms, useSaveUser, useUsers } from '@/api/hooks'
 import type { UserSavePayload } from '@/api/types'
@@ -8,6 +9,7 @@ import { useAuthStore } from '@/store/auth'
 import { ROLE_LABEL } from '@/lib/permissions'
 import { useDebounce } from '@/lib/useDebounce'
 import { fmtDate } from '@/lib/utils'
+import { SortTh, sortParams, useSort } from '@/components/SortHeader'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, SearchableSelect, Select, Spinner, TableWrap } from '@/components/ui'
 
 const ROLES: Role[] = ['ADMIN', 'MANAGER', 'TEAM_LEADER', 'CALL_CENTER_MANAGER']
@@ -177,10 +179,29 @@ function DeleteUserButton({ user, currentUserId, onMessage }: { user: User; curr
 export default function UsersSettingsPage() {
   const currentUser = useAuthStore((s) => s.user)
   const [q, setQ] = useState('')
-  const [page, setPage] = useState(1)
+  const [sp, setSp] = useSearchParams()
+  const page = Number(sp.get('page') ?? 1) || 1
+  const role = sp.get('role') ?? ''
+  const active = sp.get('isActive') ?? ''
+  const { sort, order, toggle } = useSort('createdAt', 'desc')
+  const patchSp = (patch: Record<string, string>) => setSp((prev) => {
+    const n = new URLSearchParams(prev)
+    for (const [k, v] of Object.entries(patch)) (v ? n.set(k, v) : n.delete(k))
+    if (!('page' in patch)) n.delete('page')
+    return n
+  }, { replace: true })
+  const setPage = (p: number) => patchSp({ page: p > 1 ? String(p) : '' })
   const dq = useDebounce(q)
-  useEffect(() => setPage(1), [dq])
-  const list = useUsers({ q: dq || undefined, page, pageSize: 25 })
+  const firstQ = useRef(true)
+  useEffect(() => { if (firstQ.current) { firstQ.current = false; return } patchSp({}) }, [dq]) // eslint-disable-line react-hooks/exhaustive-deps
+  const list = useUsers({
+    q: dq || undefined,
+    role: role || undefined,
+    isActive: active === '' ? undefined : active === 'true',
+    ...sortParams(sort, order),
+    page,
+    pageSize: 25,
+  })
 
   const [form, setForm] = useState<User | 'new' | null>(null)
   const [resetUser, setResetUser] = useState<User | null>(null)
@@ -199,11 +220,20 @@ export default function UsersSettingsPage() {
           <button className="ml-auto text-slate-400 hover:text-slate-600" onClick={() => setMessage(null)} aria-label="Dismiss">✕</button>
         </div>
       )}
-      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
+      <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="relative sm:col-span-2">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search users by name or username…" className="pl-9" aria-label="Search users" />
         </div>
+        <Select value={role} onChange={(e) => patchSp({ role: e.target.value })} aria-label="Role filter">
+          <option value="">Any role</option>
+          {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+        </Select>
+        <Select value={active} onChange={(e) => patchSp({ isActive: e.target.value })} aria-label="Active filter">
+          <option value="">Active or inactive</option>
+          <option value="true">Active</option>
+          <option value="false">Inactive</option>
+        </Select>
       </div>
       <div className="card overflow-hidden">
         {list.isLoading ? <Spinner /> : list.isError ? (
@@ -215,8 +245,12 @@ export default function UsersSettingsPage() {
             <TableWrap>
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="th">Name</th><th className="th">Username</th><th className="th">Role</th>
-                  <th className="th">Room</th><th className="th">Status</th><th className="th">Last login</th><th className="th">Actions</th>
+                  <SortTh label="Name" sortKey="fullName" sort={sort} order={order} onSort={toggle} />
+                  <SortTh label="Username" sortKey="username" sort={sort} order={order} onSort={toggle} />
+                  <SortTh label="Role" sortKey="role" sort={sort} order={order} onSort={toggle} />
+                  <th className="th">Room</th><th className="th">Status</th><th className="th">Last login</th>
+                  <SortTh label="Created" sortKey="createdAt" sort={sort} order={order} onSort={toggle} />
+                  <th className="th">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -228,6 +262,7 @@ export default function UsersSettingsPage() {
                     <td className="td">{u.room?.code ?? '—'}</td>
                     <td className="td">{u.isActive === false ? <Badge>Inactive</Badge> : <Badge tone="green">Active</Badge>}</td>
                     <td className="td">{fmtDate(u.lastLoginAt, true)}</td>
+                    <td className="td whitespace-nowrap text-xs">{u.createdAt ? fmtDate(u.createdAt) : '—'}</td>
                     <td className="td">
                       <div className="flex gap-1">
                         <Button size="sm" variant="ghost" onClick={() => setForm(u)} aria-label={`Edit ${u.fullName}`}><Pencil className="h-4 w-4" /></Button>

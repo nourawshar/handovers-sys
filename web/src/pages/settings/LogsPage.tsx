@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { SortTh, sortParams, useSort } from '@/components/SortHeader'
 import { Search } from 'lucide-react'
 import { useAuditLogs, useUsers } from '@/api/hooks'
 import type { AuditLogEntry } from '@/api/types'
@@ -30,11 +32,19 @@ export default function LogsPage() {
   const [q, setQ] = useState('')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  const [page, setPage] = useState(1)
+  const [sp, setSp] = useSearchParams()
+  const page = Number(sp.get('page') ?? 1) || 1
+  const { sort, order, toggle } = useSort('createdAt', 'desc')
+  const setPage = (p: number) => setSp((prev) => { const n = new URLSearchParams(prev); if (p > 1) n.set('page', String(p)); else n.delete('page'); return n }, { replace: true })
 
   const dAction = useDebounce(action)
   const dQ = useDebounce(q)
-  useEffect(() => setPage(1), [actorId, dAction, dQ, from, to])
+  // Any filter change returns to page 1 (skip the initial mount so a deep-linked page survives).
+  const firstFilters = useRef(true)
+  useEffect(() => {
+    if (firstFilters.current) { firstFilters.current = false; return }
+    setPage(1)
+  }, [actorId, dAction, dQ, from, to]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Actor dropdown is built from the (ADMIN-only) users list.
   const users = useUsers({ pageSize: 100 })
@@ -44,6 +54,7 @@ export default function LogsPage() {
     q: dQ || undefined,
     from: from || undefined,
     to: to || undefined,
+    ...sortParams(sort, order),
     page,
     pageSize: PAGE_SIZE,
   })
@@ -79,7 +90,9 @@ export default function LogsPage() {
             <TableWrap>
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="th">Date</th><th className="th">Actor</th><th className="th">Action</th>
+                  <SortTh label="Time" sortKey="createdAt" sort={sort} order={order} onSort={toggle} />
+                  <SortTh label="Actor" sortKey="actor" sort={sort} order={order} onSort={toggle} />
+                  <SortTh label="Action" sortKey="action" sort={sort} order={order} onSort={toggle} />
                   <th className="th">Target</th><th className="th">Meta</th><th className="th">IP</th>
                 </tr>
               </thead>

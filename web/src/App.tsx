@@ -13,6 +13,8 @@ import EmployeeDetailPage from '@/pages/EmployeeDetailPage'
 import AssignmentDetailPage from '@/pages/assignments/AssignmentDetailPage'
 import AssignmentReceiptPage from '@/pages/assignments/AssignmentReceiptPage'
 import ReturnPage from '@/pages/assignments/ReturnPage'
+import ReturnRecordPage from '@/pages/assignments/ReturnRecordPage'
+import ReturnReceiptPage from '@/pages/assignments/ReturnReceiptPage'
 import GenericAssignPage from '@/pages/assignments/GenericAssignPage'
 import { AssignmentsPage, DepartmentsPage, RoomsPage } from '@/pages/PeoplePages'
 import CategoriesSettingsPage from '@/pages/settings/CategoriesSettingsPage'
@@ -42,6 +44,7 @@ export default function App() {
           <Route path="/assignments/new" element={<RequireRole access="assets.new"><GenericAssignPage /></RequireRole>} />
           <Route path="/assignments/:id" element={<AssignmentDetailPage />} />
           <Route path="/assignments/:id/return" element={<RequireRole access="assets.new"><ReturnPage /></RequireRole>} />
+          <Route path="/assignments/:id/return-record" element={<ReturnRecordPage />} />
 
           <Route path="/accounts" element={<RequireRole access="accounts"><AccountsPage /></RequireRole>} />
           <Route path="/employees" element={<EmployeesPage />} />
@@ -58,6 +61,7 @@ export default function App() {
         </Route>
         {/* Mounted OUTSIDE AppLayout so nav/sidebar never enter the DOM on the receipt (clean A4 print). */}
         <Route path="/assignments/:id/receipt" element={<AssignmentReceiptPage />} />
+        <Route path="/assignments/:id/return-receipt" element={<ReturnReceiptPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

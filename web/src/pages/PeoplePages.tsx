@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { Pencil, Plus, X } from 'lucide-react'
 import { useAssignments, useDeleteDepartment, useDeleteRoom, useDepartments, useEmployees, useRooms, useSaveDepartment, useSaveRoom } from '@/api/hooks'
 import type { Department, Employee, Room } from '@/api/types'
@@ -8,21 +8,34 @@ import { useAuthStore } from '@/store/auth'
 import { can, isAdmin } from '@/lib/permissions'
 import { fmtDate, titleCase } from '@/lib/utils'
 import { Badge, Button, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, SearchableSelect, Select, Spinner, StatusBadge, TableWrap } from '@/components/ui'
+import { SortTh, sortParams, useSort, type SortOrder } from '@/components/SortHeader'
 
 export function AssignmentsPage() {
   const [status, setStatus] = useState('')
   const [type, setType] = useState('')
+  const [employeeId, setEmployeeId] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [showReturns, setShowReturns] = useState(true)
   const [q, setQ] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const { sort, order, toggle } = useSort('assignedAt', 'desc')
   const user = useAuthStore((s) => s.user)
+  const employees = useEmployees({ pageSize: 200, sort: 'fullName', order: 'asc' })
+  const employeeOpts = (employees.data?.items ?? []).map((e) => ({ value: e.id, label: e.fullName }))
   const list = useAssignments({
     status: status || undefined,
     type: type || undefined,
     q: search || undefined,
+    employeeId: employeeId || undefined,
+    assignedFrom: from || undefined,
+    assignedTo: to || undefined,
+    ...sortParams(sort, order),
     page,
     pageSize: 25,
   })
+  const sortProps = { sort, order, onSort: (k: string, n?: SortOrder) => { toggle(k, n); setPage(1) } }
   return (
     <>
       <PageHeader
@@ -56,8 +69,21 @@ export function AssignmentsPage() {
             {['DRAFT', 'ACTIVE', 'RETURNED', 'CLOSED'].map((s) => <option key={s} value={s}>{titleCase(s)}</option>)}
           </Select>
         </Field>
+        <Field label="Employee">
+          <SearchableSelect ariaLabel="Employee" options={employeeOpts} value={employeeId} onChange={(v) => { setEmployeeId(v); setPage(1) }} placeholder="Type to filter…" selectPlaceholder="Any employee" />
+        </Field>
+        <Field label="Assigned from">
+          <Input type="date" value={from} max={to || undefined} onChange={(e) => { setFrom(e.target.value); setPage(1) }} aria-label="Assigned from" />
+        </Field>
+        <Field label="Assigned to">
+          <Input type="date" value={to} min={from || undefined} onChange={(e) => { setTo(e.target.value); setPage(1) }} aria-label="Assigned to" />
+        </Field>
+        <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
+          <input type="checkbox" checked={showReturns} onChange={(e) => setShowReturns(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
+          Show return rows
+        </label>
         <div className="flex items-end gap-2">
-          <Button variant="secondary" className="w-full" onClick={() => { setQ(''); setSearch(''); setStatus(''); setType(''); setPage(1) }}>Clear</Button>
+          <Button variant="secondary" className="w-full" onClick={() => { setQ(''); setSearch(''); setStatus(''); setType(''); setEmployeeId(''); setFrom(''); setTo(''); setShowReturns(true); setPage(1) }}>Clear</Button>
         </div>
       </div>
       <div className="card overflow-hidden">
@@ -67,11 +93,18 @@ export function AssignmentsPage() {
           <>
             <TableWrap>
               <thead className="bg-slate-50"><tr>
-                <th className="th">Code</th><th className="th">Type</th><th className="th">Employee</th><th className="th">Identity</th><th className="th">Asset / model</th><th className="th">Assigned</th><th className="th">Status</th><th className="th">View</th>
+                <SortTh label="Code" sortKey="assignmentCode" {...sortProps} />
+                <SortTh label="Type" sortKey="type" {...sortProps} />
+                <SortTh label="Employee" sortKey="employee" {...sortProps} />
+                <th className="th">Identity</th><th className="th">Asset / model</th>
+                <SortTh label="Assigned" sortKey="assignedAt" {...sortProps} />
+                <SortTh label="Status" sortKey="status" {...sortProps} />
+                <th className="th">View</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {list.data.items.map((a) => (
-                  <tr key={a.id} className="hover:bg-slate-50">
+                  <Fragment key={a.id}>
+                  <tr className="hover:bg-slate-50">
                     <td className="td font-mono text-xs font-semibold"><Link to={`/assignments/${a.id}`} className="text-brand-700 hover:underline">{a.assignmentCode}</Link></td>
                     <td className="td">{titleCase(a.type)}</td>
                     <td className="td">{a.employee?.fullName ?? '—'}</td>
@@ -89,6 +122,23 @@ export function AssignmentsPage() {
                     <td className="td"><StatusBadge value={a.status} /></td>
                     <td className="td"><Link to={`/assignments/${a.id}`}><Button size="sm" variant="secondary">View</Button></Link></td>
                   </tr>
+                  {showReturns && a.returnRecord && (
+                    <tr className="bg-slate-50/60 hover:bg-slate-100/60" data-testid="return-row">
+                      <td className="td pl-8 font-mono text-xs text-slate-500"><span aria-hidden="true" className="mr-1 text-slate-400">↳</span>{a.assignmentCode}</td>
+                      <td className="td"><Badge tone="violet">Return</Badge></td>
+                      <td className="td">{a.employee?.fullName ?? '—'}</td>
+                      <td className="td" colSpan={2}>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {a.returnRecord.hasDiscrepancies ? <Badge tone="red">Discrepancies</Badge> : <Badge tone="green">No discrepancies</Badge>}
+                          {a.returnRecord.unreturnedOpen > 0 && <Badge tone="amber">{a.returnRecord.unreturnedOpen} unreturned</Badge>}
+                        </div>
+                      </td>
+                      <td className="td">{fmtDate(a.returnRecord.returnedAt ?? a.returnedAt)}</td>
+                      <td className="td"><Badge tone="slate">Returned</Badge></td>
+                      <td className="td"><Link to={`/assignments/${a.id}/return-record`}><Button size="sm" variant="secondary">View</Button></Link></td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </TableWrap>

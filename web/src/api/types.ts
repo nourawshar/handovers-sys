@@ -25,6 +25,7 @@ export interface User {
   room?: RoomRef | null
   isActive?: boolean
   lastLoginAt?: string | null
+  createdAt?: string
 }
 
 /**
@@ -202,6 +203,7 @@ export interface Employee {
   internalEmail: string | null
   status: 'ACTIVE' | 'LEFT' | 'ON_LEAVE' | string
   notes: string | null
+  createdAt?: string
 }
 
 export const EMPLOYEE_STATUSES = ['ACTIVE', 'LEFT', 'ON_LEAVE'] as const
@@ -252,6 +254,8 @@ export interface Assignment {
   returnedAt?: string | null
   /** Total items in the assignment (primary + accessories) when the list endpoint provides it. */
   itemCount?: number | null
+  /** Phase 9: non-null once the assignment was returned (list rows). */
+  returnRecord?: ReturnRecordSummary | null
 }
 
 export interface Department {
@@ -525,6 +529,70 @@ export interface ReturnResult {
   photos?: { handover?: Photo[]; return?: Photo[] }
   /** What the return did to each returned asset's own condition (primary first). */
   assetConditions?: AssetConditionChange[]
+  /** Phase 9: required items that did not come back (POST return response). */
+  unreturnedItems?: ReturnSubmitUnreturned[]
+}
+
+/* ---------- Phase 9: return record, unreturned items ---------- */
+
+export interface ReturnRecordSummary { returnedAt: string | null; hasDiscrepancies: boolean; unreturnedOpen: number }
+
+/** Entry of `unreturnedItems` in the POST /assignments/:id/return response. */
+export interface ReturnSubmitUnreturned { kind: string; code: string; name: string }
+
+export interface UnreturnedResolution {
+  kind: 'RETURNED' | 'LOST' | string
+  at: string | null
+  by: { id: string; fullName: string } | null
+  notes: string | null
+  condition: string | null
+}
+
+export interface UnreturnedEntry {
+  kind: 'ASSET' | 'ACCOUNT' | string
+  assetId: string | null
+  accountId: string | null
+  code: string
+  name: string
+  role: string
+  status: 'OPEN' | 'RESOLVED' | string
+  resolution: UnreturnedResolution | null
+}
+
+export interface ReturnRecordItem {
+  assetId: string
+  code: string
+  name: string
+  role: string
+  serialNumber: string | null
+  conditionAtHandover: string | null
+  returnCondition: string | null
+  returned: boolean
+}
+
+export interface ReturnRecord {
+  id: string
+  assignmentId: string
+  assignmentCode: string
+  returnedAt: string | null
+  returnedBy: { id: string; fullName: string } | null
+  returnCondition: string | null
+  returnNotes: string | null
+  employee: { id: string; fullName: string; department: { id: string; name: string } | null; room: { id: string; code: string } | null } | null
+  workIdentity: { id: string; name: string } | null
+  items: ReturnRecordItem[]
+  comparison: ComparisonField[]
+  hasDiscrepancies: boolean
+  unreturned: UnreturnedEntry[]
+  photos: { handover: Photo[]; return: Photo[] }
+}
+
+export interface ResolveUnreturnedPayload {
+  assetId?: string
+  accountId?: string
+  resolution: 'RETURNED' | 'LOST'
+  condition?: string
+  notes?: string
 }
 
 export interface AssetConditionChange {
@@ -629,3 +697,29 @@ export interface ReportFilters {
 }
 
 export type ExportFormat = 'csv' | 'xlsx'
+
+/* ---------- Phase 9: asset "Condition over handovers" (GET /assets/:id/handover-history) ---------- */
+export type HandoverChange = 'same' | 'worse' | 'better' | 'unknown'
+
+export interface HandoverHistoryRow {
+  assignmentId: string
+  assignmentCode: string
+  status: string
+  role: string
+  employee: { id: string; fullName: string } | null
+  assignedAt: string | null
+  returnedAt: string | null
+  conditionAtHandover: string | null
+  returnCondition: string | null
+  change: HandoverChange
+  returnNotes: string | null
+  discrepancyCount: number
+  unreturnedOpen: boolean
+  photoCount: number
+}
+
+export interface HandoverHistory {
+  asset: { id: string; code: string; name: string; condition: string } | null
+  current: LastConditionCheck | null
+  rows: HandoverHistoryRow[]
+}

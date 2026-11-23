@@ -12,6 +12,8 @@ import {
   Button, ConditionBadge, EmptyState, ErrorState, Input, PageHeader, Pagination, SearchableSelect, Select, Spinner, StatusBadge, TableWrap,
 } from '@/components/ui'
 import { ASSET_STATUSES } from '@/api/types'
+import { SortTh, sortParams, useSort } from '@/components/SortHeader'
+import { fmtDate } from '@/lib/utils'
 
 const PAGE_SIZE = 25
 
@@ -54,6 +56,7 @@ export default function AssetListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [sp, setSp] = useSearchParams()
+  const { sort, order, toggle } = useSort('createdAt', 'desc')
   const categories = useCategories()
   const employees = useEmployees({ pageSize: 100 })
 
@@ -85,6 +88,7 @@ export default function AssetListPage() {
       condition: condition || undefined,
       status: status || undefined,
       holderId: holderId || undefined,
+      ...sortParams(sort, order),
       page,
       pageSize: PAGE_SIZE,
     },
@@ -146,8 +150,14 @@ export default function AssetListPage() {
             <TableWrap>
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="th">Code</th><th className="th">Name</th><th className="th">Category</th>
-                  <th className="th">IMEI / Serial</th><th className="th">Condition</th><th className="th">Status</th><th className="th">Holder</th><th className="th">View</th>{isAdmin && <th className="th">Actions</th>}
+                  <SortTh label="Code" sortKey="code" sort={sort} order={order} onSort={toggle} />
+                  <SortTh label="Name" sortKey="name" sort={sort} order={order} onSort={toggle} />
+                  <SortTh label="Category" sortKey="category" sort={sort} order={order} onSort={toggle} />
+                  <th className="th">IMEI / Serial</th>
+                  <SortTh label="Condition" sortKey="condition" sort={sort} order={order} onSort={toggle} />
+                  <SortTh label="Status" sortKey="status" sort={sort} order={order} onSort={toggle} />
+                  <th className="th">Holder</th>
+                  <SortTh label="Created" sortKey="createdAt" sort={sort} order={order} onSort={toggle} /><th className="th">View</th>{isAdmin && <th className="th">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -160,6 +170,7 @@ export default function AssetListPage() {
                     <td className="td"><ConditionBadge value={a.condition} /></td>
                     <td className="td"><StatusBadge value={a.status} /></td>
                     <td className="td">{a.currentHolder?.fullName ?? '—'}</td>
+                    <td className="td whitespace-nowrap text-xs">{a.createdAt ? fmtDate(a.createdAt) : '—'}</td>
                     <td className="td"><Link to={`/assets/${a.id}`}><Button size="sm" variant="secondary">View</Button></Link></td>
                     {isAdmin && (
                       <td className="td">
